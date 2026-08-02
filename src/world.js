@@ -1,4 +1,8 @@
-// Renderer, camera rig (smooth follow + zoom), lights, post-processing.
+// Renderer, camera rig (smooth follow + zoom + impact punch), lights,
+// post-processing. The rig clamps the visible frustum (at the terrain plane
+// z=0) so the camera never shows past the world's art: terrain spans x ±1200,
+// so the view is kept within ~±1050 horizontally, and never dips below the
+// sea nor above the sky art.
 
 import * as THREE from 'three';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
@@ -7,6 +11,10 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { WORLD_W, WORLD_H } from './terrain.js';
 import { clamp, lerp } from './util.js';
+
+const ART_X = 1050;        // max |x| the view may reach at z=0
+const VIEW_BOTTOM = -170;  // lowest world y the view bottom may reach (sea strip)
+const VIEW_TOP = 1500;     // highest world y the view top may reach
 
 export class World {
   constructor(canvas) {
@@ -32,6 +40,7 @@ export class World {
 
     this.target = { x: 0, y: WORLD_H * 0.3, zoom: 1400 };
     this.pos = { ...this.target };
+    this.punchT = 0; // impact zoom-punch impulse (0..1, decays)
 
     this.resize();
     window.addEventListener('resize', () => this.resize());
@@ -45,20 +54,56 @@ export class World {
     this.camera.updateProjectionMatrix();
   }
 
-  // Follow a world point; zoom out when action is high up.
+  // Follow a world point; wide = zoom out (projectile flight).
+  // Raw values are fine here — _clampView keeps the frustum inside the art.
   follow(fx, fy, wide = false) {
-    this.target.x = clamp(fx, -WORLD_W * 0.35, WORLD_W * 0.35);
-    this.target.y = clamp(fy, WORLD_H * 0.15, WORLD_H * 0.8);
-    this.target.zoom = wide ? 1750 : 1350;
+    this.target.x = fx;
+    this.target.y = fy;
+    this.target.zoom = wide ? 1680 : 1240;
+  }
+
+  // Brief zoom punch (impact juice). strength 0..1.
+  punch(strength = 1) {
+    this.punchT = Math.max(this.punchT, clamp(strength, 0, 1));
+  }
+
+  // Clamp a {x, y, zoom} view so the frustum at z=0 stays inside the art.
+  _clampView(v) {
+    const tanH = Math.tan((this.camera.fov * Math.PI) / 360);
+    const aspect = this.camera.aspect || 16 / 9;
+    // Zoom cap: half-width of the view at z=0 must fit inside ART_X.
+    const maxZoom = ART_X / (tanH * aspect);
+    v.zoom = clamp(v.zoom, 620, Math.min(1900, maxZoom));
+    const halfH = tanH * v.zoom;
+    const halfW = halfH * aspect;
+    const xLim = Math.max(0, ART_X - halfW);
+    v.x = clamp(v.x, -xLim, xLim);
+    const yMin = VIEW_BOTTOM + halfH;
+    const yMax = VIEW_TOP - halfH;
+    v.y = yMin > yMax ? (yMin + yMax) / 2 : clamp(v.y, yMin, yMax);
+    return v;
   }
 
   update(dt, shake = { x: 0, y: 0 }) {
+    this._clampView(this.target);
     const k = 1 - Math.pow(0.0018, dt);
     this.pos.x = lerp(this.pos.x, this.target.x, k);
     this.pos.y = lerp(this.pos.y, this.target.y, k);
-    this.pos.zoom = lerp(this.pos.zoom, this.target.zoom, k * 0.7);
-    this.camera.position.set(this.pos.x + shake.x, this.pos.y + shake.y, this.pos.zoom);
-    this.camera.lookAt(this.pos.x + shake.x, this.pos.y + shake.y, 0);
+    // Zoom eases a touch faster than pan: snappy-but-eased zoom-in at turn
+    // start, gentle drift-out during flight.
+    this.pos.zoom = lerp(this.pos.zoom, this.target.zoom, k * 0.9);
+
+    // Impact zoom punch: quick dip toward the action, springs back.
+    if (this.punchT > 0) this.punchT = Math.max(0, this.punchT - dt * 3.4);
+    const pk = this.punchT * this.punchT;
+
+    const view = this._clampView({
+      x: this.pos.x,
+      y: this.pos.y,
+      zoom: this.pos.zoom * (1 - pk * 0.085),
+    });
+    this.camera.position.set(view.x + shake.x, view.y + shake.y, view.zoom);
+    this.camera.lookAt(view.x + shake.x, view.y + shake.y, 0);
     this.composer.render();
   }
 }

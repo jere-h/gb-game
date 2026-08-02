@@ -44,7 +44,7 @@ async function settle(frames = 30) {
   }, frames);
 }
 
-await page.goto(`http://localhost:${PORT}/?seed=${seed}`, { waitUntil: 'load' });
+await page.goto(`http://localhost:${PORT}/?seed=${seed}&fixeddt=1`, { waitUntil: 'load' });
 await page.waitForFunction(() => window.__GB && window.__GB.framesRendered() > 10, { timeout: 15000 });
 
 await settle(60);

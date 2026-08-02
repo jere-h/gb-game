@@ -36,28 +36,43 @@ const mobiles = [p1, p2];
 const game = new Game({ scene: world.scene, terrain, mobiles, effects, ui, audio, camera: world.camera, seed });
 const input = new Input(game);
 
+// Impact juice: game asks for a camera zoom punch at the moment of impact.
+game.onImpactKick = (strength) => world.punch(strength);
+
 // Demo poses for screenshot capture.
 if (params.pose === 'charge') {
   game.input('chargeStart');
   game.power = 62;
 }
 
+// ?fixeddt=1: step exactly 1/60s per rendered frame so screenshot captures
+// hit deterministic moments even under slow software rendering.
+const fixedDt = params.fixeddt === '1' ? 1 / 60 : 0;
+
 let last = performance.now();
 let frames = 0;
 function loop(now) {
-  const dt = Math.min(0.05, (now - last) / 1000);
+  const rawDt = fixedDt || Math.min(0.05, (now - last) / 1000);
   last = now;
   frames++;
+
+  // Hitstop: at the moment of impact the game freezes (~80ms) while the
+  // camera punch, shake, and environment keep breathing.
+  let dt = rawDt;
+  if (game.hitstop > 0) {
+    game.hitstop -= rawDt;
+    dt = 0;
+  }
 
   input.update(dt);
   game.update(dt);
   effects.update(dt);
-  env.update(dt, now / 1000);
+  env.update(rawDt, now / 1000);
   for (const m of mobiles) if (m.alive) m.syncTransform();
 
   const wide = game.state === 'flying';
   world.follow(game.focus.x, game.focus.y, wide);
-  world.update(dt, effects.shakeOffset());
+  world.update(rawDt, effects.shakeOffset());
   requestAnimationFrame(loop);
 }
 requestAnimationFrame(loop);
