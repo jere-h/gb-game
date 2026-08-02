@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ThunderBound — Artillery Duel</title>
+<style>
+  :root {
+    --gb-panel: #1b2340;
+    --gb-panel-light: #2c3a6b;
+    --gb-gold: #ffd75e;
+    --gb-red: #ff5b4d;
+    --gb-blue: #59c1ff;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; user-select: none; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
+  body { font-family: 'Trebuchet MS', 'Segoe UI', Verdana, sans-serif; }
+  #app { position: fixed; inset: 0; }
+  canvas#gl { display: block; width: 100%; height: 100%; }
+  #hud { position: absolute; inset: 0; pointer-events: none; z-index: 10; }
+</style>
+</head>
+<body>
+<div id="app">
+  <canvas id="gl"></canvas>
+  <div id="hud"></div>
+</div>
+<script type="importmap">
+{
+  "imports": {
+    "three": "./vendor/three.module.js",
+    "three/addons/": "./vendor/jsm/"
+  }
+}
+</script>
+<script type="module" src="./src/main.js"></script>
+</body>
+</html>
