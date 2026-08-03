@@ -114,7 +114,7 @@ function drawRoot(ctx, x0, y0, len, drift, baseW, rng, depth = 0) {
   const N = 14;
   // Alternating bows give the strand a hand-drawn S wiggle instead of the old
   // near-straight quadratic stick.
-  const bow = (rng() < 0.5 ? -1 : 1) * (0.18 + rng() * 0.3) * len;
+  const bow = (rng() < 0.5 ? -1 : 1) * (0.26 + rng() * 0.34) * len;
   const c1x = x0 + drift * 0.2 + bow;
   const c1y = y0 + len * 0.32;
   const c2x = x0 + drift * 0.72 - bow * (0.5 + rng() * 0.4);
@@ -127,7 +127,7 @@ function drawRoot(ctx, x0, y0, len, drift, baseW, rng, depth = 0) {
     const it = 1 - t;
     xs.push(it * it * it * x0 + 3 * it * it * t * c1x + 3 * it * t * t * c2x + t * t * t * x3);
     ys.push(it * it * it * y0 + 3 * it * it * t * c1y + 3 * it * t * t * c2y + t * t * t * y3);
-    hw.push(0.5 + (baseW / 2 - 0.5) * Math.pow(it, 1.5));
+    hw.push(0.8 + (baseW / 2 - 0.8) * Math.pow(it, 1.15));
   }
   ctx.beginPath();
   ctx.moveTo(xs[0] - hw[0], ys[0]);
@@ -151,13 +151,13 @@ function drawRoot(ctx, x0, y0, len, drift, baseW, rng, depth = 0) {
   for (let i = 1; i < N; i++) ctx.lineTo(xs[i] - hw[i] + 0.6, ys[i]);
   ctx.stroke();
   if (depth === 0 && baseW > 4) {
-    const nb = 1 + ((rng() * 2) | 0);
+    const nb = 2 + ((rng() * 2) | 0);
     for (let b = 0; b < nb; b++) {
-      const t = 0.26 + rng() * 0.4;
+      const t = 0.2 + rng() * 0.5;
       const i = Math.round(t * N);
       const side = rng() > 0.5 ? 1 : -1;
-      drawRoot(ctx, xs[i], ys[i], len * (0.26 + rng() * 0.24),
-        side * (12 + rng() * 20), Math.max(2.5, baseW * 0.42), rng, 1);
+      drawRoot(ctx, xs[i], ys[i], len * (0.3 + rng() * 0.28),
+        side * (14 + rng() * 22), Math.max(3, baseW * 0.45), rng, 1);
     }
   }
 }
@@ -333,59 +333,64 @@ export class Terrain {
     this.paintShoreline(rng);
   }
 
-  // Wet-sand transition where the dirt body plunges into the sea. Breaks the
-  // ruler-straight bottom cut with a wavy darkened band, tide-mark sheen lines
-  // and a few translucent wave scallops lapping onto the dirt. Painted
+  // Wet-sand transition where the dirt body plunges into the sea: a wavy
+  // darkened band that cools toward deep teal at the very edge, topped by an
+  // irregular white foam scallop line (randomized bump widths/heights, no
+  // fixed pitch) with a fainter wet-edge foam line just below it. Painted
   // source-atop, so it only tints existing terrain pixels (mask untouched).
   paintShoreline(rng) {
     const { ctx, w, h } = this;
-    const p0 = rng() * 9, p1 = rng() * 9, p2 = rng() * 9, p3 = rng() * 9;
+    const p0 = rng() * 9, p1 = rng() * 9;
     ctx.save();
     ctx.globalCompositeOperation = 'source-atop';
 
-    // Darkened wet-dirt band with a low-frequency wobbling top edge.
-    const yTop = (x) => h - 46 + 6 * Math.sin(x * 0.021 + p0) + 4 * Math.sin(x * 0.0093 + p1);
+    // Darkened wet-dirt band with a low-frequency wobbling top edge, sinking
+    // into a cool teal shadow right at the waterline so the dirt reads as
+    // plunging into water instead of being cut off.
+    const yTop = (x) => h - 56 + 6 * Math.sin(x * 0.021 + p0) + 4 * Math.sin(x * 0.0093 + p1);
     ctx.beginPath();
     ctx.moveTo(-2, h + 2);
     ctx.lineTo(-2, yTop(0));
     for (let x = 0; x <= w; x += 8) ctx.lineTo(x, yTop(x));
     ctx.lineTo(w + 2, h + 2);
     ctx.closePath();
-    const g = ctx.createLinearGradient(0, h - 54, 0, h);
+    const g = ctx.createLinearGradient(0, h - 62, 0, h);
     g.addColorStop(0, 'rgba(58,36,21,0)');
-    g.addColorStop(0.45, 'rgba(46,28,16,0.5)');
-    g.addColorStop(1, 'rgba(24,14,9,0.85)');
+    g.addColorStop(0.4, 'rgba(44,27,16,0.5)');
+    g.addColorStop(0.72, 'rgba(22,17,13,0.8)');
+    g.addColorStop(1, 'rgba(6,22,30,0.92)');
     ctx.fillStyle = g;
     ctx.fill();
 
-    // Tide-mark sheen lines (sine-displaced, light cyan).
-    ctx.lineJoin = 'round';
-    const tide = (yBase, a1, f1, a2, f2, ph, width, style) => {
+    // Irregular foam scallop strip hugging the waterline: arc bumps 10-30px
+    // wide with jittered baseline and height, occasional flat gaps, so the
+    // eye finds no repeat. Second fainter line below = layered wet edge.
+    const foam = (yBase, alpha, hMin, hMax, thick) => {
       ctx.beginPath();
-      for (let x = 0; x <= w; x += 6) {
-        const y = yBase + a1 * Math.sin(x * f1 + ph) + a2 * Math.sin(x * f2 + ph * 1.7);
-        if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      ctx.moveTo(-2, yBase + thick);
+      let yb = yBase + (rng() - 0.5) * 2.5;
+      ctx.lineTo(-2, yb);
+      let x = 0;
+      while (x < w + 30) {
+        const bw = 10 + rng() * 20;
+        const bh = hMin + rng() * (hMax - hMin);
+        const ny = yBase + (rng() - 0.5) * 3;
+        ctx.quadraticCurveTo(x + bw * (0.3 + rng() * 0.4), Math.min(yb, ny) - bh, x + bw, ny);
+        yb = ny;
+        x += bw;
+        if (rng() < 0.16) { // occasional low flat stretch between crests
+          const gw = 8 + rng() * 16;
+          ctx.lineTo(Math.min(w + 30, x + gw), yb + 1.5);
+          x += gw;
+        }
       }
-      ctx.lineWidth = width;
-      ctx.strokeStyle = style;
-      ctx.stroke();
-    };
-    tide(h - 37, 2.6, 0.017, 1.8, 0.043, p2, 2.6, 'rgba(215,246,255,0.5)');
-    tide(h - 43, 2.2, 0.013, 1.5, 0.037, p3, 1.6, 'rgba(215,246,255,0.26)');
-
-    // Overlapping translucent wave scallops lapping up the dirt.
-    for (let x = 30 + rng() * 60; x < w; x += 70 + rng() * 90) {
-      const sr = 26 + rng() * 30;
-      const ry = 6 + rng() * 6;
-      const y = h - 30 - rng() * 9;
-      ctx.beginPath();
-      ctx.ellipse(x, y, sr, ry, 0, Math.PI, Math.PI * 2);
-      ctx.fillStyle = 'rgba(200,242,255,0.10)';
+      ctx.lineTo(w + 2, yBase + thick);
+      ctx.closePath();
+      ctx.fillStyle = `rgba(236,250,252,${alpha})`;
       ctx.fill();
-      ctx.strokeStyle = 'rgba(228,252,255,0.28)';
-      ctx.lineWidth = 2;
-      ctx.stroke();
-    }
+    };
+    foam(h - 37, 0.78, 3, 8, 4);
+    foam(h - 29, 0.3, 2, 5, 4);
     ctx.restore();
   }
 
@@ -406,12 +411,44 @@ export class Terrain {
 
     // Sunlit topsoil ribbon hugging the ground surface.
     ctx.beginPath();
-    ctx.moveTo(0, h - hAt(0) + 12);
-    for (let x = 0; x <= w; x += 6) ctx.lineTo(x, h - hAt(x) + 12);
-    for (let x = w; x >= 0; x -= 6) ctx.lineTo(x, h - hAt(x) + 64);
+    ctx.moveTo(0, h - hAt(0) + 26);
+    for (let x = 0; x <= w; x += 6) ctx.lineTo(x, h - hAt(x) + 26);
+    for (let x = w; x >= 0; x -= 6) ctx.lineTo(x, h - hAt(x) + 72);
     ctx.closePath();
     ctx.fillStyle = 'rgba(176,132,84,0.4)';
     ctx.fill();
+
+    // Compacted crust band directly under the sod: a darker, wobbly-edged
+    // 10-20px seam separating grass roots from loose topsoil.
+    const cph = rng() * 9;
+    ctx.beginPath();
+    ctx.moveTo(0, h - hAt(0) + 10);
+    for (let x = 0; x <= w; x += 6) {
+      ctx.lineTo(x, h - hAt(x) + 10 + 2.5 * Math.sin(x * 0.031 + cph));
+    }
+    for (let x = w; x >= 0; x -= 6) {
+      ctx.lineTo(x, h - hAt(x) + 23 + 4 * Math.sin(x * 0.017 + cph * 1.6) + 2 * Math.sin(x * 0.06 + cph));
+    }
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(56,36,21,0.4)';
+    ctx.fill();
+
+    // Large low-frequency warm/cool colour pockets (120-300px) so the big
+    // dirt faces read as patched earth instead of one flat gradient.
+    for (let i = 0; i < 13; i++) {
+      const x = rng() * w;
+      const gy = h - hAt(x);
+      const y = gy + 40 + rng() * Math.max(1, h - gy - 40);
+      const r = 120 + rng() * 180;
+      const warm = rng() > 0.45;
+      const cg = ctx.createRadialGradient(x, y, 0, x, y, r);
+      cg.addColorStop(0, warm ? 'rgba(206,144,82,0.11)' : 'rgba(62,56,84,0.10)');
+      cg.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = cg;
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.fill();
+    }
 
     // Big soft clumps of lighter/darker earth.
     for (let i = 0; i < 70; i++) {
@@ -472,18 +509,58 @@ export class Terrain {
         drawRock(ctx, rx2, ry2, rr, rng, dT);
       }
     }
-    for (let i = 0; i < 240; i++) {
+    // Pebbles: clustered 2-4 per pocket, density decaying with depth (dense
+    // just under the crust, sparse near the bottom), the odd larger stone —
+    // not the old uniform full-body confetti scatter.
+    for (let i = 0; i < 95; i++) {
       const x = rng() * w;
       const gy = h - hAt(x);
       let y;
-      if (bands.length && rng() < 0.7) {
+      if (bands.length && rng() < 0.4) {
         const b = bands[(rng() * bands.length) | 0];
-        y = b.y + warp(x) + Math.sin(x * b.f + b.ph) * b.amp + (rng() - 0.5) * 14;
-        if (y < gy + 26 || y > h - 4) continue;
+        y = b.y + warp(x) + Math.sin(x * b.f + b.ph) * b.amp + (rng() - 0.5) * 12;
       } else {
-        y = gy + 26 + rng() * Math.max(1, h - gy - 30);
+        y = gy + 30 + Math.pow(rng(), 2.1) * Math.max(1, h - gy - 36);
       }
-      drawPebble(ctx, x, y, 1.5 + rng() * 3.5, rng);
+      if (y < gy + 26 || y > h - 6) continue;
+      const cnt = 2 + ((rng() * 3) | 0);
+      for (let k = 0; k < cnt; k++) {
+        const px2 = x + (rng() - 0.5) * 32;
+        const py2 = y + (rng() - 0.5) * 14;
+        if (py2 < h - hAt(px2) + 24 || py2 > h - 4) continue;
+        drawPebble(ctx, px2, py2, 1.5 + rng() * 3.2, rng);
+      }
+      if (rng() < 0.16) {
+        const dT = clamp((y - gy) / Math.max(1, h - gy), 0, 1);
+        drawRock(ctx, x + (rng() - 0.5) * 26, y + rng() * 10, 5 + rng() * 5, rng, dT);
+      }
+    }
+
+    // Hairline cracks near the surface: dark 1px branching strokes wandering
+    // down from just under the crust.
+    const crack = (x, y, ang, len, depth2) => {
+      let cx2 = x, cy2 = y, a = ang;
+      ctx.strokeStyle = 'rgba(32,18,8,0.4)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(cx2, cy2);
+      const segs = 2 + ((rng() * 2) | 0);
+      for (let s2 = 0; s2 < segs; s2++) {
+        a += (rng() - 0.5) * 0.8;
+        const sl = len * (0.2 + rng() * 0.2);
+        cx2 += Math.cos(a) * sl;
+        cy2 += Math.sin(a) * sl;
+        ctx.lineTo(cx2, cy2);
+      }
+      ctx.stroke();
+      if (depth2 === 0 && rng() < 0.6) {
+        crack(cx2, cy2, a + (rng() < 0.5 ? -0.8 : 0.8), len * 0.45, 1);
+      }
+    };
+    for (let i = 0; i < 8; i++) {
+      const x = 30 + rng() * (w - 60);
+      const gy = h - hAt(x);
+      crack(x, gy + 26 + rng() * 18, Math.PI / 2 + (rng() - 0.5) * 1.1, 16 + rng() * 16, 0);
     }
 
     // Fine speckle grain — light speckles halved in the upper half of the soil
@@ -546,9 +623,30 @@ export class Terrain {
         if (this.mask[y * this.w + col]) { yBot = y; break; }
       }
       if (yBot < 0) continue;
-      const len = 30 + rng() * 90;
-      const drift = (rng() - 0.5) * 44;
-      drawRoot(ctx, col, yBot - 4, len, drift, 7 + rng() * 3, rng);
+      // Dirt clods clinging to the belly around the root base, so the strand
+      // grows out of loose earth instead of being pinned to a clean edge.
+      for (let c = 0; c < 3; c++) {
+        ctx.fillStyle = c === 1 ? '#5a4029' : '#48331f';
+        ctx.beginPath();
+        ctx.ellipse(col + (rng() - 0.5) * 18, yBot - 2 + rng() * 5,
+          4 + rng() * 5, 3 + rng() * 3, rng() * Math.PI, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      // Loose hanging rootlets / grass threads beside the main strand.
+      const nThr = 2 + ((rng() * 2) | 0);
+      for (let t2 = 0; t2 < nThr; t2++) {
+        const hx = col + (rng() - 0.5) * 26;
+        const hl = 6 + rng() * 13;
+        ctx.strokeStyle = rng() < 0.35 ? 'rgba(88,158,62,0.9)' : 'rgba(84,60,40,0.9)';
+        ctx.lineWidth = 1.3;
+        ctx.beginPath();
+        ctx.moveTo(hx, yBot - 1);
+        ctx.quadraticCurveTo(hx + (rng() - 0.5) * 6, yBot + hl * 0.6, hx + (rng() - 0.5) * 9, yBot + hl);
+        ctx.stroke();
+      }
+      const len = 34 + rng() * 70;
+      const drift = (rng() - 0.5) * 50;
+      drawRoot(ctx, col, yBot - 4, len, drift, 10 + rng() * 4, rng);
     }
     // Dangling grass tufts at the rim corners (Miramo-style loose sod).
     for (const side of [-1, 1]) {
@@ -733,15 +831,24 @@ export class Terrain {
     ctx.save();
     ctx.lineJoin = 'round';
     ctx.lineCap = 'round';
-    const strokeRuns = (dy, width, colFn) => {
+    // Deterministic per-x wobble applied to the edge strokes so the dark
+    // under-edge drifts +/-2px against the silhouette instead of tracing it
+    // at machine-constant offset (which read as a printed rubber lip).
+    const p = this._np;
+    const jit = (x) => 1.1 * Math.sin(x * 0.147 + p[0] * 3.1)
+                     + 0.9 * Math.sin(x * 0.061 + p[1] * 2.3)
+                     + 0.5 * Math.sin(x * 0.023 + p[2]);
+    const strokeRuns = (dy, width, jAmt, colFn) => {
       let i = 0;
       while (i < m - 1) {
         const bucket = Math.min(4, (sc[i] * 5) | 0);
         let j = i + 1;
         while (j < m - 1 && Math.min(4, (sc[j] * 5) | 0) === bucket) j++;
         ctx.beginPath();
-        ctx.moveTo(chn.x0 + i, ys[i] + dy);
-        for (let k = i + 1; k <= j; k++) ctx.lineTo(chn.x0 + k, ys[k] + dy);
+        ctx.moveTo(chn.x0 + i, ys[i] + dy + jit(chn.x0 + i) * jAmt);
+        for (let k = i + 1; k <= j; k++) {
+          ctx.lineTo(chn.x0 + k, ys[k] + dy + jit(chn.x0 + k) * jAmt);
+        }
         ctx.strokeStyle = colFn(bucket / 4);
         ctx.lineWidth = width;
         ctx.stroke();
@@ -749,61 +856,69 @@ export class Terrain {
       }
     };
     // Deep-green silhouette under-edge, then the dark ink line above it.
-    strokeRuns(0.6, 3.4, (s) => css(mix([31, 107, 42], [44, 30, 18], s)));
-    strokeRuns(-1.9, 2.4, (s) => css(mix([26, 34, 16], [10, 6, 4], s), 0.95));
+    // Different jitter amounts make the gap between them breathe too.
+    strokeRuns(0.6, 3.4, 1.0, (s) => css(mix([31, 107, 42], [44, 30, 18], s)));
+    strokeRuns(-1.9, 2.4, 0.55, (s) => css(mix([26, 34, 16], [10, 6, 4], s), 0.95));
 
-    // Clustered tufts: one drawn blade-clump every ~7px with jittered position,
-    // height and lean; alternating greens; burnt stubs where scorched.
+    // Scattered blade clusters: coarse 16px cells each holding 0-2 clumps at
+    // hashed offsets, so effective spacing wanders 8-30px with bare skips —
+    // no fixed pitch for the eye to lock onto. Each clump is 2-4 short
+    // tapered blades in two green tones with +/-35% scale variation.
+    // Burnt stubs replace clumps where scorched.
     if (m >= 6) {
-      const SP = 7;
+      const CELL = 16;
       const xa = chn.x0 + 1, xb = chn.x0 + m - 2;
-      for (let k = Math.floor(xa / SP); k <= Math.ceil(xb / SP); k++) {
-        const hh = this.hash01(k * 17.3 + 5);
-        if (hh < 0.14) continue; // occasional bare patch
-        const cx = k * SP + 1 + this.hash01(k * 3.7) * (SP - 2);
-        if (cx < xa || cx > xb) continue;
-        const fi = cx - chn.x0;
-        const i0 = Math.floor(fi), ft = fi - i0;
-        const y = ys[i0] * (1 - ft) + ys[Math.min(m - 1, i0 + 1)] * ft;
-        const slope = (ys[Math.min(m - 1, i0 + 3)] - ys[Math.max(0, i0 - 3)]) / 6;
-        const s = this.scorchAt(Math.round(cx), Math.round(y));
-        if (s >= 0.55) {
-          if (hh > 0.45) { // sparse burnt sprigs on charred ground
-            ctx.fillStyle = 'rgba(26,18,12,0.9)';
+      for (let k = Math.floor(xa / CELL); k <= Math.ceil(xb / CELL); k++) {
+        const hSkip = this.hash01(k * 17.3 + 5);
+        if (hSkip < 0.18) continue; // bare stretch
+        const nClump = hSkip > 0.78 ? 2 : 1;
+        for (let c = 0; c < nClump; c++) {
+          const h1 = this.hash01(k * 3.7 + c * 41.7);
+          const h2 = this.hash01(k * 9.1 + c * 13.9 + 4);
+          const h3 = this.hash01(k * 5.3 + c * 7.7 + 2);
+          const cx = k * CELL + h1 * CELL;
+          if (cx < xa || cx > xb) continue;
+          const fi = cx - chn.x0;
+          const i0 = Math.floor(fi), ft = fi - i0;
+          const y = ys[i0] * (1 - ft) + ys[Math.min(m - 1, i0 + 1)] * ft;
+          const slope = (ys[Math.min(m - 1, i0 + 3)] - ys[Math.max(0, i0 - 3)]) / 6;
+          const s = this.scorchAt(Math.round(cx), Math.round(y));
+          if (s >= 0.55) {
+            if (h2 > 0.45) { // sparse burnt sprigs on charred ground
+              ctx.fillStyle = 'rgba(26,18,12,0.9)';
+              ctx.beginPath();
+              ctx.moveTo(cx - 1.1, y + 1);
+              ctx.lineTo(cx + (h2 - 0.5) * 2, y - 2.4 - h2 * 1.6);
+              ctx.lineTo(cx + 1.1, y + 1);
+              ctx.closePath();
+              ctx.fill();
+            }
+            continue;
+          }
+          const scale = 0.65 + h2 * 0.75;
+          const blades = 2 + ((h3 * 2.7) | 0);
+          const lean0 = clamp(-slope * 2.5, -2.8, 2.8) + (h2 - 0.5) * 2.4;
+          const toneA = h1 > 0.5 ? [58, 182, 78] : [104, 212, 66];
+          const toneB = h1 > 0.5 ? [40, 134, 54] : [66, 170, 58];
+          for (let b = 0; b < blades; b++) {
+            const hb = this.hash01(k * 23.3 + c * 3.1 + b * 11.1);
+            const bx = cx + (b - (blades - 1) / 2) * (1.5 + hb * 1.7);
+            const th = (3 + hb * 5) * scale * (1 - s * 0.5);
+            const wk = (1.1 + hb * 0.9) * scale;
+            const lean = lean0 + (hb - 0.5) * 2.8;
+            ctx.fillStyle = css(mix(b % 2 ? toneB : toneA, [58, 42, 26], s), 0.96);
             ctx.beginPath();
-            ctx.moveTo(cx - 1.1, y + 1);
-            ctx.lineTo(cx + (hh - 0.5) * 2, y - 2.4 - hh * 1.6);
-            ctx.lineTo(cx + 1.1, y + 1);
+            ctx.moveTo(bx - wk, y + 1.5);
+            ctx.quadraticCurveTo(bx - wk * 0.3 + lean * 0.4, y - th * 0.6, bx + lean, y - th);
+            ctx.quadraticCurveTo(bx + wk * 0.4 + lean * 0.3, y - th * 0.4, bx + wk, y + 1.5);
             ctx.closePath();
             ctx.fill();
           }
-          continue;
-        }
-        const th = (3.5 + hh * 4.5) * (1 - s * 0.5);
-        const wk = 2.2 + this.hash01(k * 9 + 4) * 1.6;
-        const lean = clamp(-slope * 2.5, -2.6, 2.6) + (this.hash01(k * 5 + 2) - 0.5) * 2.2;
-        const lush = k % 2 === 0 ? [53, 178, 74] : [99, 209, 62];
-        // Darker back-blade first on some clumps for depth.
-        if (hh > 0.5) {
-          ctx.fillStyle = css(mix([40, 132, 52], [50, 36, 24], s), 0.95);
-          ctx.beginPath();
-          ctx.moveTo(cx - wk * 0.4 + 2.4, y + 1.5);
-          ctx.quadraticCurveTo(cx + 2.6 - lean * 0.3, y - th * 0.5, cx + 2.4 - lean * 0.6, y - th * 0.72);
-          ctx.lineTo(cx + wk + 2.6, y + 1.5);
-          ctx.closePath();
-          ctx.fill();
-        }
-        ctx.fillStyle = css(mix(lush, [58, 42, 26], s));
-        ctx.beginPath();
-        ctx.moveTo(cx - wk, y + 1.5);
-        ctx.quadraticCurveTo(cx - wk * 0.35 + lean * 0.3, y - th * 0.6, cx + lean, y - th);
-        ctx.quadraticCurveTo(cx + wk * 0.45 + lean * 0.3, y - th * 0.42, cx + wk, y + 1.5);
-        ctx.closePath();
-        ctx.fill();
-        // Rare flower head on tall clumps.
-        if (hh > 0.94 && s < 0.25) {
-          ctx.fillStyle = hh > 0.975 ? 'rgba(255,248,236,0.95)' : 'rgba(255,214,92,0.95)';
-          ctx.fillRect(cx + lean - 1, y - th - 2.4, 2, 2);
+          // Rare flower head on tall clumps.
+          if (h3 > 0.93 && s < 0.25 && scale > 0.9) {
+            ctx.fillStyle = h3 > 0.97 ? 'rgba(255,248,236,0.95)' : 'rgba(255,214,92,0.95)';
+            ctx.fillRect(cx + lean0 - 1, y - 8 * scale - 2.4, 2, 2);
+          }
         }
       }
     }
