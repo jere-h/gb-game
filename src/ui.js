@@ -87,6 +87,72 @@ function paintPortrait(canvas, typeKey, type, px) {
   g.fillStyle = gl; g.fillRect(0, 0, s, s * 0.55);
 }
 
+// Paint a hand-drawn item sprite into a console slot canvas.
+// kinds: 'dual' (twin gold shells), 'teleport' (blue swirl).
+function paintItem(canvas, kind, px = 40) {
+  const s = px * 2;
+  canvas.width = s; canvas.height = s;
+  canvas.style.width = `${px}px`; canvas.style.height = `${px}px`;
+  const g = canvas.getContext('2d');
+  const u = s / 40;
+  g.lineJoin = g.lineCap = 'round';
+  if (kind === 'dual') {
+    // soft socket glow behind the shells
+    const bg = g.createRadialGradient(20 * u, 20 * u, 2 * u, 20 * u, 20 * u, 19 * u);
+    bg.addColorStop(0, 'rgba(255,200,80,0.30)'); bg.addColorStop(1, 'rgba(255,200,80,0)');
+    g.fillStyle = bg; g.fillRect(0, 0, s, s);
+    const shell = (cx) => {
+      g.save();
+      g.translate(cx * u, 20 * u); g.rotate(-0.12);
+      // brass casing
+      const grad = g.createLinearGradient(-4 * u, 0, 4 * u, 0);
+      grad.addColorStop(0, '#fff0b0'); grad.addColorStop(0.45, '#ffd75e');
+      grad.addColorStop(1, '#b97f1d');
+      g.fillStyle = grad;
+      g.strokeStyle = '#141224'; g.lineWidth = 1.8 * u;
+      g.beginPath(); g.roundRect(-4 * u, -4 * u, 8 * u, 15 * u, 2 * u); g.fill(); g.stroke();
+      // warhead
+      g.fillStyle = '#ff8a3c';
+      g.beginPath();
+      g.moveTo(-4 * u, -3 * u);
+      g.quadraticCurveTo(0, -14 * u, 4 * u, -3 * u);
+      g.closePath(); g.fill(); g.stroke();
+      // specular
+      g.fillStyle = 'rgba(255,255,255,0.6)';
+      g.beginPath(); g.roundRect(-2.6 * u, -2 * u, 1.8 * u, 10 * u, 1 * u); g.fill();
+      g.restore();
+    };
+    shell(14); shell(26);
+  } else {
+    // teleport: glowing blue swirl
+    const bg = g.createRadialGradient(20 * u, 20 * u, 2 * u, 20 * u, 20 * u, 19 * u);
+    bg.addColorStop(0, 'rgba(90,190,255,0.4)'); bg.addColorStop(1, 'rgba(90,190,255,0)');
+    g.fillStyle = bg; g.fillRect(0, 0, s, s);
+    g.strokeStyle = '#141224'; g.lineWidth = 5.2 * u;
+    const swirl = () => {
+      g.beginPath();
+      for (let a = 0; a < Math.PI * 2.4; a += 0.1) {
+        const r = (2.5 + a * 4.4) * u * 0.42;
+        const x = 20 * u + Math.cos(a + 0.8) * r;
+        const y = 20 * u + Math.sin(a + 0.8) * r;
+        a === 0 ? g.moveTo(x, y) : g.lineTo(x, y);
+      }
+      g.stroke();
+    };
+    swirl();
+    const grad = g.createLinearGradient(6 * u, 6 * u, 34 * u, 34 * u);
+    grad.addColorStop(0, '#d9f2ff'); grad.addColorStop(0.5, '#59c1ff');
+    grad.addColorStop(1, '#1f6fd9');
+    g.strokeStyle = grad; g.lineWidth = 2.6 * u;
+    swirl();
+    // sparkles
+    g.fillStyle = '#ffffff';
+    for (const [sx, sy, r] of [[30, 9, 1.6], [9, 28, 1.2], [31, 30, 1.1]]) {
+      g.beginPath(); g.arc(sx * u, sy * u, r * u, 0, Math.PI * 2); g.fill();
+    }
+  }
+}
+
 export class UI {
   constructor(root) {
     this.root = root;
@@ -145,6 +211,19 @@ export class UI {
           transition: transform 0.45s cubic-bezier(.34,1.4,.64,1), opacity 0.3s;
           filter: drop-shadow(0 2px 2px rgba(0,0,0,0.55));
         }
+        /* 0.8s ease pulse retriggered on every wind change */
+        #hud .wind.pulse { animation: windPulse 0.8s cubic-bezier(.34,1.5,.64,1); }
+        @keyframes windPulse { 30% { transform: scale(1.13); } }
+        /* wind-speed streaks drifting across the dial in the wind direction */
+        #hud .windStreaks line { animation: streakDrift 1.25s linear infinite; }
+        #hud .windStreaks line:nth-child(2) { animation-delay: -0.45s; }
+        #hud .windStreaks line:nth-child(3) { animation-delay: -0.85s; }
+        @keyframes streakDrift {
+          0%   { transform: translateX(-9px); opacity: 0; }
+          22%  { opacity: 1; }
+          78%  { opacity: 1; }
+          100% { transform: translateX(9px); opacity: 0; }
+        }
         /* soft offset gloss (no hard split) */
         #hud .wind .gloss {
           position: absolute; inset: 0; border-radius: 50%; pointer-events: none;
@@ -191,6 +270,80 @@ export class UI {
           background: linear-gradient(rgba(255,255,255,0.28), rgba(255,255,255,0.02));
           pointer-events: none;
         }
+        /* rival-turn hand-off: console visibly stands down */
+        #hud .console.waiting { opacity: 0.78; }
+        #hud .console.waiting .fireBtn {
+          filter: grayscale(0.72) brightness(0.82);
+          box-shadow: 0 0 0 1px rgba(200,200,210,0.25),
+            inset 0 2px 0 rgba(255,255,255,0.4),
+            inset 0 -7px 10px rgba(40,40,60,0.5), 0 3px 8px rgba(0,0,0,0.5);
+        }
+        /* full-bleed navy baseboard docking the console to the bottom edge */
+        #hud .baseboard {
+          position: absolute; left: 0; right: 0; bottom: 0; height: 14px;
+          background: linear-gradient(180deg, #2c3a6b 0%, #1a2350 45%, #0e1430 100%);
+          border-top: 2px solid #e8b64a;
+          box-shadow: 0 -1px 0 #6b4a12, inset 0 2px 3px rgba(255,255,255,0.14),
+            0 -4px 14px rgba(0,0,10,0.35);
+        }
+        /* wing panels flanking the center console (match navy + gold trim) */
+        #hud .wing {
+          position: absolute; bottom: 10px; height: 88px;
+          padding: 9px 14px 10px; border-radius: 14px;
+          display: flex; align-items: center; justify-content: space-evenly; gap: 12px;
+          background:
+            linear-gradient(180deg, #45579e 0%, #2a3767 20%, #1c264e 62%, #131a38 100%);
+          border: 2px solid #e8b64a;
+          box-shadow:
+            0 0 0 2px #6b4a12,
+            inset 0 2px 0 rgba(255,255,255,0.32),
+            inset 0 -8px 12px rgba(0,0,0,0.42),
+            0 6px 18px rgba(0,0,0,0.55);
+        }
+        #hud .wing.wingL { left: 14px; right: calc(50% + 488px); }
+        #hud .wing.wingR { right: 14px; left: calc(50% + 488px); }
+        #hud .wing::before { /* top gloss strip, echoes the console */
+          content: ''; position: absolute; left: 8px; right: 8px; top: 3px; height: 10px;
+          border-radius: 10px 10px 30px 30px;
+          background: linear-gradient(rgba(255,255,255,0.26), rgba(255,255,255,0.02));
+          pointer-events: none;
+        }
+        #hud .wStat { display: flex; flex-direction: column; align-items: center; gap: 3px; }
+        #hud .wNum {
+          font-size: 24px; font-weight: 800; line-height: 1; color: var(--gold);
+          text-shadow: 0 2px 0 rgba(0,0,0,0.7), 0 0 8px rgba(0,0,0,0.5);
+          font-family: 'Baloo 2', 'Trebuchet MS', sans-serif;
+        }
+        /* GunBound-style shot selector: 1 / 2 / SS keycaps */
+        #hud .shotSel { display: flex; gap: 5px; }
+        #hud .shotBtn {
+          min-width: 26px; height: 26px; padding: 0 5px; border-radius: 6px;
+          display: flex; align-items: center; justify-content: center;
+          background: linear-gradient(#3b4a80, #1c2549 60%, #141b3d);
+          border: 1px solid #0a0f22;
+          box-shadow: inset 0 1px 0 rgba(255,255,255,0.28), 0 2px 0 rgba(0,0,0,0.6);
+          color: #aebbe8; font-size: 13px; font-weight: 800;
+          text-shadow: 0 1px 2px #000;
+        }
+        #hud .shotBtn.on {
+          background: linear-gradient(#ffe9a0, #ffd75e 55%, #d59b1f);
+          border-color: #6b4a12; color: #402c05;
+          text-shadow: 0 1px 0 rgba(255,255,255,0.5);
+          box-shadow: inset 0 1px 0 rgba(255,255,255,0.7), 0 0 8px rgba(255,215,94,0.45),
+            0 2px 0 rgba(0,0,0,0.55);
+        }
+        /* wind history chips (right wing) */
+        #hud .windLog { display: flex; gap: 5px; }
+        #hud .wchip {
+          min-width: 30px; height: 26px; padding: 0 6px; border-radius: 6px;
+          display: flex; align-items: center; justify-content: center; gap: 2px;
+          background: linear-gradient(#0a0f26, #131b40 70%, #182252);
+          border: 1px solid #0a0f22;
+          box-shadow: inset 0 2px 4px rgba(0,0,0,0.8), inset 0 -1px 0 rgba(120,160,255,0.16);
+          color: #ffe7a0; font-size: 13px; font-weight: 800; text-shadow: 0 1px 2px #000;
+        }
+        #hud .wchip .wdir { font-size: 10px; color: #9fd0ff; }
+        #hud .wchip.empty { color: rgba(140,170,255,0.3); }
         #hud .row { display: flex; align-items: center; gap: 14px; }
         #hud .miniLabel {
           font-size: 10px; font-weight: 800; letter-spacing: 2.5px;
@@ -235,8 +388,8 @@ export class UI {
           text-shadow: 0 0 8px rgba(255,190,60,0.85), 0 0 2px rgba(255,220,120,1);
         }
         #hud .anglePrev {
-          font-size: 10px; font-weight: 700; letter-spacing: 0.5px;
-          color: rgba(255,215,94,0.55); text-shadow: 0 1px 2px #000;
+          font-size: 11px; font-weight: 800; letter-spacing: 0.5px;
+          color: #d9b24a; text-shadow: 0 1px 2px #000;
           margin-left: 4px; opacity: 0; transition: opacity 0.3s;
         }
         #hud .anglePrev.show { opacity: 1; }
@@ -245,7 +398,7 @@ export class UI {
         #hud .powerBox { flex: 1; display: flex; flex-direction: column; gap: 2px; }
         #hud .powerWrap {
           position: relative; height: 30px; border-radius: 9px; padding: 3px;
-          background: linear-gradient(#05081a, #0d1230 70%, #10173a);
+          background: linear-gradient(#0a1230, #121a40 70%, #1a2a55);
           border: 2px solid #0a0f22;
           box-shadow:
             inset 0 4px 9px rgba(0,0,0,0.9),
@@ -264,7 +417,7 @@ export class UI {
         #hud .segRow { display: flex; gap: 2px; height: 100%; }
         #hud .seg {
           flex: 1; border-radius: 2px;
-          background: linear-gradient(#1b2348, #0d1230);
+          background: linear-gradient(#1d2650, #10173a 60%, #182450);
           box-shadow: inset 0 1px 1px rgba(0,0,0,0.7), inset -1px 0 0 rgba(255,255,255,0.05);
           transform: skewX(-12deg);
           transition: background 0.05s;
@@ -305,6 +458,24 @@ export class UI {
           background: linear-gradient(rgba(255,255,255,0.30), rgba(255,255,255,0.02));
           border-radius: 6px 6px 0 0; pointer-events: none;
         }
+        /* numeric ruler labels at the 25/50/75 reference ticks */
+        #hud .powerNums { position: absolute; inset: 2px 4px; pointer-events: none; }
+        #hud .powerNums span {
+          position: absolute; top: 0; transform: translateX(-50%);
+          font-size: 8px; font-weight: 800; letter-spacing: 0.5px; line-height: 1;
+          color: rgba(255,222,120,0.85); text-shadow: 0 1px 2px #000, 0 0 4px rgba(0,0,10,0.9);
+        }
+        /* slow idle shimmer so the empty gauge reads as powered-on, not dead */
+        #hud .powerShine {
+          position: absolute; top: 0; bottom: 0; width: 26%;
+          background: linear-gradient(100deg, rgba(255,255,255,0) 0%,
+            rgba(255,255,255,0.09) 45%, rgba(190,215,255,0.13) 55%, rgba(255,255,255,0) 100%);
+          animation: powerShine 3s linear infinite; pointer-events: none;
+        }
+        @keyframes powerShine {
+          from { left: -28%; } to { left: 104%; }
+        }
+        #hud .powerWrap.charging .powerShine { display: none; }
         /* white 'previous shot' marker with dark outline (GunBound staple) */
         #hud .powerLast {
           position: absolute; top: 1px; bottom: 1px; width: 3px; margin-left: -1px;
@@ -324,22 +495,29 @@ export class UI {
         #hud .slotsBox { display: flex; flex-direction: column; align-items: center; gap: 3px; }
         #hud .slots { display: flex; gap: 6px; }
         #hud .slot {
-          position: relative; width: 42px; height: 42px; border-radius: 8px;
+          position: relative; width: 44px; height: 44px; border-radius: 8px;
           background: linear-gradient(#0a0f26, #131b40 70%, #182252);
           border: 2px solid #e8b64a;
-          box-shadow: 0 0 0 1px #6b4a12, inset 0 3px 6px rgba(0,0,0,0.85),
-            inset 0 -1px 0 rgba(120,160,255,0.18), 0 2px 5px rgba(0,0,0,0.5);
-          overflow: hidden;
+          box-shadow: 0 0 0 1px #6b4a12,
+            inset 1px 1px 0 rgba(0,0,10,0.75),           /* bevel: dark top-left */
+            inset -1px -1px 0 rgba(140,170,255,0.28),    /* bevel: light bottom-right */
+            inset 0 3px 6px rgba(0,0,0,0.7),
+            0 2px 5px rgba(0,0,0,0.5);
+          overflow: hidden; line-height: 0;
         }
+        #hud .slot canvas { position: absolute; inset: 0; }
         #hud .slot::after { /* diagonal sheen */
           content: ''; position: absolute; inset: -40% 60% 40% -60%;
           transform: rotate(-24deg);
           background: linear-gradient(rgba(255,255,255,0.16), rgba(255,255,255,0.01));
         }
-        #hud .slot::before { /* faint empty-socket cross */
-          content: '+'; position: absolute; inset: 0;
-          display: flex; align-items: center; justify-content: center;
-          color: rgba(140,170,255,0.22); font-size: 20px; font-weight: 800;
+        #hud .slotKey { /* gold keycap hint pinned to the slot corner */
+          position: absolute; right: 1px; bottom: 1px; z-index: 1;
+          padding: 1px 3px; border-radius: 3px 0 5px 0; line-height: 1;
+          background: linear-gradient(#ffe9a0, #d59b1f);
+          border: 1px solid #6b4a12;
+          color: #402c05; font-size: 7px; font-weight: 800; letter-spacing: 0.5px;
+          box-shadow: inset 0 1px 0 rgba(255,255,255,0.6), 0 1px 2px rgba(0,0,0,0.6);
         }
 
         /* --- circular timer --- */
@@ -370,22 +548,43 @@ export class UI {
           font-size: 21px; font-weight: 800; color: #fff;
           text-shadow: 0 0 6px rgba(120,170,255,0.7), 0 2px 2px #000;
         }
+        #hud .timerRing.rival .timer { color: #ffc9be; }
         #hud .timerRing.low .timer { color: #ff6b5e; text-shadow: 0 0 8px rgba(255,60,40,0.9), 0 2px 2px #000; }
         #hud .timerRing.low { animation: hudPulse 0.6s ease-in-out infinite; }
         @keyframes hudPulse { 50% { transform: scale(1.08); } }
 
-        /* --- chunky FIRE button --- */
+        /* --- chunky glossy FIRE button --- */
         #hud .fireBtn {
+          position: relative; overflow: hidden;
           width: 60px; height: 60px; border-radius: 50%; flex: 0 0 60px;
           display: flex; align-items: center; justify-content: center;
-          background: radial-gradient(circle at 50% 30%, #ffe9a0, #ffd76a 42%, #c8901e 92%);
+          background: radial-gradient(circle at 50% 30%,
+            #fff3c0 0%, #ffe38a 26%, #ffd05a 52%, #e6a92c 78%, #d9a018 100%);
           border: 2px solid #4a3006;
           box-shadow: 0 0 0 1px rgba(255,235,170,0.35),
-            inset 0 2px 0 rgba(255,255,255,0.65),
-            inset 0 -7px 10px rgba(120,70,10,0.5),
-            0 4px 10px rgba(0,0,0,0.55);
+            inset 0 2px 0 #fff2c0,                       /* rim bevel: light top */
+            inset 0 -2px 0 #8a5f00,                      /* rim bevel: dark bottom */
+            inset 0 -8px 12px rgba(120,70,10,0.55),
+            0 6px 12px rgba(0,0,0,0.55);
           color: #402c05; font-weight: 800; font-size: 15px; letter-spacing: 1.2px;
-          text-shadow: 0 1px 0 rgba(255,255,255,0.5);
+          text-shadow: 0 1px 0 rgba(255,255,255,0.55), 0 -1px 0 rgba(90,55,0,0.35);
+          transition: filter 0.25s;
+        }
+        #hud .fireBtn::before { /* specular gloss ellipse across the top third */
+          content: ''; position: absolute; left: 14%; right: 14%; top: 7%; height: 34%;
+          border-radius: 50%;
+          background: linear-gradient(rgba(255,255,255,0.75), rgba(255,255,255,0.05));
+          pointer-events: none;
+        }
+        #hud .fireBtn:active, #hud .fireBtn.held {
+          background: radial-gradient(circle at 50% 42%,
+            #ffedaa 0%, #ffda72 30%, #f0b93e 60%, #cf9214 100%);
+          box-shadow: 0 0 0 1px rgba(255,235,170,0.35),
+            inset 0 3px 6px rgba(90,55,0,0.55),
+            inset 0 -1px 0 #8a5f00, 0 2px 5px rgba(0,0,0,0.5);
+        }
+        #hud .fireBtn:active > span, #hud .fireBtn.held > span {
+          transform: translateY(2px); display: inline-block;
         }
 
         /* ============ player cards ============ */
@@ -398,7 +597,18 @@ export class UI {
           border: 2px solid #e8b64a;
           box-shadow: 0 0 0 2px #6b4a12, inset 0 1px 0 rgba(255,255,255,0.3),
             inset 0 -6px 10px rgba(0,0,0,0.35), 0 5px 14px rgba(0,0,0,0.55);
-          transition: opacity 0.4s, filter 0.4s;
+          transition: opacity 0.4s, filter 0.4s, box-shadow 0.4s;
+        }
+        /* active-turn glow: soft blue for you, warning red for the rival */
+        #hud .pcard.activeYou {
+          box-shadow: 0 0 0 2px #6b4a12, inset 0 1px 0 rgba(255,255,255,0.3),
+            inset 0 -6px 10px rgba(0,0,0,0.35), 0 5px 14px rgba(0,0,0,0.55),
+            0 0 16px 3px rgba(89,193,255,0.65);
+        }
+        #hud .pcard.activeRival {
+          box-shadow: 0 0 0 2px #6b4a12, inset 0 1px 0 rgba(255,255,255,0.3),
+            inset 0 -6px 10px rgba(0,0,0,0.35), 0 5px 14px rgba(0,0,0,0.55),
+            0 0 16px 3px rgba(255,91,77,0.6);
         }
         #hud .pcard.dead { opacity: 0.55; filter: saturate(0.25) brightness(0.8); }
         #hud .pRow { display: flex; align-items: center; gap: 9px; }
@@ -453,20 +663,25 @@ export class UI {
         }
         #hud .hpfill.mid { background: linear-gradient(#fff0b0, #ffd75e 45%, #d59b1f 90%); }
         #hud .hpfill.crit { background: linear-gradient(#ffb3a8, #ff5b4d 45%, #c22619 90%); }
-        /* 25% segment ticks over the fill */
+        /* embossed 10-HP cell dividers over the fill (paired dark+light 1px) */
         #hud .hpticks {
           position: absolute; top: 1px; bottom: 1px; left: 0; right: 0;
           pointer-events: none;
-          background: linear-gradient(90deg,
-            transparent 0 calc(25% - 1px), rgba(5,9,22,0.55) calc(25% - 1px) calc(25% + 1px),
-            transparent calc(25% + 1px) calc(50% - 1px), rgba(5,9,22,0.55) calc(50% - 1px) calc(50% + 1px),
-            transparent calc(50% + 1px) calc(75% - 1px), rgba(5,9,22,0.55) calc(75% - 1px) calc(75% + 1px),
-            transparent calc(75% + 1px));
+          background: repeating-linear-gradient(90deg,
+            transparent 0 calc(10% - 2px),
+            rgba(5,9,22,0.55) calc(10% - 2px) calc(10% - 1px),
+            rgba(255,255,255,0.28) calc(10% - 1px) 10%);
         }
         #hud .hpbar .sheen {
-          position: absolute; left: 1px; right: 1px; top: 1px; height: 45%;
-          background: linear-gradient(rgba(255,255,255,0.5), rgba(255,255,255,0.04));
+          position: absolute; left: 1px; right: 1px; top: 1px; height: 38%;
+          background: linear-gradient(rgba(255,255,255,0.55), rgba(255,255,255,0.10));
           border-radius: 6px 6px 0 0; pointer-events: none;
+        }
+        /* damage feedback: white flash on the fill before the red trail drains */
+        #hud .hpfill.flash { animation: hpFlash 0.35s ease-out; }
+        @keyframes hpFlash {
+          0% { filter: brightness(3.2) saturate(0.2); }
+          100% { filter: brightness(1) saturate(1); }
         }
 
         /* ============ turn banner ============ */
@@ -476,24 +691,33 @@ export class UI {
           opacity: 0; pointer-events: none;
         }
         #hud .banner.show { opacity: 1; }
+        /* Full-viewport designed ribbon: navy band + gold keylines, both ends
+           fading to alpha 0 through the same mask so no hard cuts ever show. */
         #hud .banner .bRibbon {
           grid-area: 1 / 1; position: relative;
-          width: min(980px, 86vw); height: 78px; align-self: center; justify-self: center;
-          background: linear-gradient(90deg,
-            rgba(19,26,56,0) 0%, rgba(19,26,56,0.82) 22%,
-            rgba(19,26,56,0.82) 78%, rgba(19,26,56,0) 100%);
+          justify-self: stretch; align-self: center;
+          width: 100%; height: 84px;
+          background:
+            linear-gradient(180deg, rgba(38,49,95,0.92) 0%, rgba(16,22,50,0.90) 45%,
+              rgba(10,15,36,0.92) 100%);
+          -webkit-mask-image: linear-gradient(90deg,
+            transparent 0%, #000 14%, #000 86%, transparent 100%);
+          mask-image: linear-gradient(90deg,
+            transparent 0%, #000 14%, #000 86%, transparent 100%);
           opacity: 0;
         }
-        #hud .banner.show .bRibbon { animation: ribbonIn 0.35s ease-out both; }
-        @keyframes ribbonIn { from { opacity: 0; transform: scaleY(0.2); } to { opacity: 1; transform: scaleY(1); } }
+        #hud .banner.show .bRibbon { animation: ribbonIn 0.3s ease-out both; }
+        @keyframes ribbonIn {
+          from { opacity: 0; transform: translateY(-16px) scaleY(0.4); }
+          to   { opacity: 1; transform: translateY(0) scaleY(1); }
+        }
         #hud .banner .bRibbon::before, #hud .banner .bRibbon::after {
           content: ''; position: absolute; left: 0; right: 0; height: 2px;
-          background: linear-gradient(90deg,
-            rgba(255,215,94,0) 0%, rgba(255,215,94,0.85) 25%,
-            rgba(255,215,94,0.85) 75%, rgba(255,215,94,0) 100%);
+          background: linear-gradient(180deg, #ffe9a0, #d9a018);
+          box-shadow: 0 1px 3px rgba(0,0,10,0.6);
         }
-        #hud .banner .bRibbon::before { top: 0; }
-        #hud .banner .bRibbon::after { bottom: 0; }
+        #hud .banner .bRibbon::before { top: 3px; }
+        #hud .banner .bRibbon::after { bottom: 3px; }
         #hud .bInner { grid-area: 1 / 1; display: grid; z-index: 1; }
         #hud .bInner > span {
           grid-area: 1 / 1; font-size: 56px; font-weight: 800; letter-spacing: 1px;
@@ -546,20 +770,23 @@ export class UI {
           100% { transform: translate(-50%, -84px) scale(0.92); opacity: 0; }
         }
 
-        /* ============ help pill (docked above console, fades after 1st shot) */
+        /* ============ help tab (flush on the console's top rail) ============ */
         #hud .help {
-          position: absolute; bottom: calc(100% + 9px); left: 50%; transform: translateX(-50%);
+          position: absolute; bottom: 100%; left: 50%;
+          transform: translate(-50%, 2px); z-index: -1;
           display: flex; align-items: center; gap: 6px;
-          padding: 5px 14px 6px; border-radius: 999px;
-          background: linear-gradient(180deg, #26315f, #1a2352 55%, #131a38);
-          border: 1px solid #c9a227;
-          box-shadow: 0 0 0 1px rgba(60,40,6,0.8), 0 3px 10px rgba(0,0,0,0.5),
-            inset 0 1px 0 rgba(255,255,255,0.18);
+          padding: 5px 16px 8px; border-radius: 12px 12px 0 0;
+          background: linear-gradient(180deg, #2c3a6b, #1a2352 60%, #161e42);
+          border: 2px solid #e8b64a; border-bottom: none;
+          box-shadow: 0 0 0 2px rgba(107,74,18,0.85),
+            inset 0 1px 0 rgba(255,255,255,0.22);
           color: #e6eeff; font-size: 12px; font-weight: 700;
           letter-spacing: 0.3px; text-shadow: 0 1px 2px #000; white-space: nowrap;
-          transition: opacity 0.5s, visibility 0.5s;
+          transition: opacity 0.25s, visibility 0.25s, transform 0.25s;
         }
-        #hud .help.gone { opacity: 0; visibility: hidden; }
+        #hud .help.gone {
+          opacity: 0; visibility: hidden; transform: translate(-50%, 26px);
+        }
         #hud .help .ht { color: #ffe7a0; margin-right: 2px; }
         #hud .help .sep { width: 4px; height: 4px; border-radius: 50%;
           background: rgba(255,215,94,0.55); margin: 0 4px; }
@@ -632,6 +859,12 @@ export class UI {
           #hud.touch .rotateOverlay { display: flex; }
         }
 
+        /* wings need wide flanks; drop them on narrow screens / touch layouts */
+        @media (max-width: 1360px) {
+          #hud .wing { display: none; }
+        }
+        #hud.touch .wing { display: none; }
+
         /* ============ compact HUD for small screens ============ */
         @media (max-width: 980px) {
           #hud .console {
@@ -660,12 +893,28 @@ export class UI {
         <div class="windPlate">
           <div class="wind">
             <svg class="windSvg" viewBox="0 0 100 100">
+              <defs>
+                <linearGradient id="gbWindGrad" x1="0" y1="0" x2="0" y2="1">
+                  <stop class="wg0" offset="0" stop-color="#b6ffc4"/>
+                  <stop class="wg1" offset="1" stop-color="#1d9c38"/>
+                </linearGradient>
+              </defs>
               <g class="windTicks"></g>
               <g class="needleG">
-                <polygon class="needleMain" points="46,36 94,50 46,64 54,50"
-                  fill="#9fd0ff" stroke="#101630" stroke-width="2.5" stroke-linejoin="round"/>
-                <polygon class="needleFin" points="8,37 25,50 8,63 15.5,50"
-                  fill="#9fd0ff" stroke="#101630" stroke-width="2.5" stroke-linejoin="round"/>
+                <g class="windStreaks" stroke="rgba(255,255,255,0.6)"
+                  stroke-width="2.6" stroke-linecap="round">
+                  <line x1="14" y1="27" x2="34" y2="27"/>
+                  <line x1="66" y1="73" x2="86" y2="73"/>
+                  <line x1="8" y1="50" x2="24" y2="50"/>
+                </g>
+                <rect class="needleShaft" x="14" y="43.5" width="56" height="13" rx="6.5"
+                  fill="url(#gbWindGrad)" stroke="#101630" stroke-width="3"/>
+                <polygon class="needleFin" points="4,34 28,50 4,66 13,50"
+                  fill="url(#gbWindGrad)" stroke="#101630" stroke-width="3"
+                  stroke-linejoin="round"/>
+                <polygon class="needleMain" points="58,25 98,50 58,75 67,50"
+                  fill="url(#gbWindGrad)" stroke="#101630" stroke-width="3"
+                  stroke-linejoin="round"/>
               </g>
             </svg>
             <div class="gloss"></div>
@@ -683,6 +932,30 @@ export class UI {
         <div class="bInner"><span class="bStroke"></span><span class="bFill"></span></div>
       </div>
       <div class="dmgLayer"></div>
+
+      <div class="baseboard"></div>
+      <div class="wing wingL">
+        <div class="wStat">
+          <div class="shotSel">
+            <div class="shotBtn on">1</div><div class="shotBtn">2</div><div class="shotBtn">SS</div>
+          </div>
+          <div class="miniLabel">SHOT</div>
+        </div>
+        <div class="wStat">
+          <div class="wNum delayNum">780</div>
+          <div class="miniLabel">DELAY</div>
+        </div>
+      </div>
+      <div class="wing wingR">
+        <div class="wStat">
+          <div class="windLog"></div>
+          <div class="miniLabel">WIND LOG</div>
+        </div>
+        <div class="wStat">
+          <div class="wNum roundNum">1</div>
+          <div class="miniLabel">ROUND</div>
+        </div>
+      </div>
 
       <div class="console">
         <div class="help">
@@ -703,8 +976,13 @@ export class UI {
           </div>
           <div class="powerBox">
             <div class="powerWrap">
-              <div class="powerClip"><div class="segRow"></div></div>
+              <div class="powerClip"><div class="segRow"></div><div class="powerShine"></div></div>
               <div class="powerTicks"></div>
+              <div class="powerNums">
+                <span style="left:25%">25</span><span style="left:50%">50</span>
+                <span style="left:75%">75</span>
+                <span style="left:100%;transform:translateX(-100%)">100</span>
+              </div>
               <div class="sheen"></div>
               <div class="powerEdge"></div>
               <div class="powerLast" style="left:0%"></div>
@@ -712,7 +990,10 @@ export class UI {
             <div class="miniLabel" style="text-align:center">POWER</div>
           </div>
           <div class="slotsBox">
-            <div class="slots"><div class="slot"></div><div class="slot"></div></div>
+            <div class="slots">
+              <div class="slot"><canvas class="itemC1"></canvas><span class="slotKey">F1</span></div>
+              <div class="slot"><canvas class="itemC2"></canvas><span class="slotKey">F2</span></div>
+            </div>
             <div class="miniLabel">ITEMS</div>
           </div>
           <div class="timerBox">
@@ -742,6 +1023,15 @@ export class UI {
       windFin: root.querySelector('.needleFin'),
       windVal: root.querySelector('.windBadge'),
       windTicks: root.querySelector('.windTicks'),
+      windDial: root.querySelector('.wind'),
+      windHi: root.querySelector('.wg0'),
+      windLo: root.querySelector('.wg1'),
+      windStreaks: root.querySelector('.windStreaks'),
+      windLog: root.querySelector('.windLog'),
+      console: root.querySelector('.console'),
+      fireLabel: root.querySelector('.fireBtn span'),
+      delayNum: root.querySelector('.delayNum'),
+      roundNum: root.querySelector('.roundNum'),
       angle: root.querySelector('.angle'),
       anglePrev: root.querySelector('.anglePrev'),
       segRow: root.querySelector('.segRow'),
@@ -806,6 +1096,14 @@ export class UI {
     this._helpGone = false;  // one-shot: hint fades permanently after 1st fire
     this._idSet = false;     // console identity portrait painted once
     this._bRaf = 0;          // banner dismiss rAF handle
+    this._rivalTurn = false; // console stands down while the rival aims
+    this._lastT = null;      // last timer value (repainted on turn hand-off)
+    this._windLog = [];      // recent wind values for the right-wing chips
+    this._round = 0;
+
+    // Paint the two console item sprites (dual shot + teleport).
+    paintItem(root.querySelector('.itemC1'), 'dual');
+    paintItem(root.querySelector('.itemC2'), 'teleport');
   }
 
   // Wire the on-screen touch buttons to the Input instance (press/release with
@@ -837,18 +1135,41 @@ export class UI {
   }
 
   setWind(wind) {
-    // wind: signed, positive = blowing right. Tapered needle orbits the
-    // center badge; length + color scale with wind strength.
+    // wind: signed, positive = blowing right. One bold arrow (fin + shaft +
+    // fat head) crosses the dial behind the number badge; length scales and
+    // tint shifts green -> gold -> red with strength, plus a pulse on change.
     const s = Math.abs(wind);
     this.el.windVal.textContent = s.toFixed(0);
     const t = Math.min(1, s / 9);
-    const scale = s === 0 ? 0.7 : 0.85 + t * 0.28;
+    const scale = s === 0 ? 0.72 : 0.85 + t * 0.28;
     this.el.windArrowWrap.style.transform =
       `rotate(${wind >= 0 ? 0 : 180}deg) scale(${scale})`;
-    this.el.windArrowWrap.style.opacity = s === 0 ? 0.35 : 1;
-    const col = s === 0 ? '#8fa2d4' : lerpColor('#9fd0ff', '#ff5533', t);
-    this.el.windArrow.setAttribute('fill', col);
-    this.el.windFin.setAttribute('fill', col);
+    this.el.windArrowWrap.style.opacity = s === 0 ? 0.4 : 1;
+    let hi, lo;
+    if (s <= 3) { hi = '#b6ffc4'; lo = '#22b545'; }
+    else if (s <= 7) { hi = '#fff0b0'; lo = '#e0a422'; }
+    else { hi = '#ffc0b0'; lo = '#e03a22'; }
+    if (s === 0) { hi = '#c6d2f2'; lo = '#68789f'; }
+    this.el.windHi.setAttribute('stop-color', hi);
+    this.el.windLo.setAttribute('stop-color', lo);
+    this.el.windStreaks.style.opacity = s === 0 ? '0' : (0.3 + 0.7 * t).toFixed(2);
+    // retrigger the 0.8s pulse
+    this.el.windDial.classList.remove('pulse');
+    void this.el.windDial.offsetWidth;
+    this.el.windDial.classList.add('pulse');
+    // wind history chips in the right wing (latest on the right)
+    this._windLog.push(wind);
+    if (this._windLog.length > 3) this._windLog.shift();
+    if (this.el.windLog) {
+      let h = '';
+      for (let i = 0; i < 3; i++) {
+        const w = this._windLog[this._windLog.length - 3 + i];
+        h += w === undefined
+          ? `<span class="wchip empty">&ndash;</span>`
+          : `<span class="wchip"><span class="wdir">${w < 0 ? '&#9668;' : '&#9658;'}</span>${Math.abs(w)}</span>`;
+      }
+      this.el.windLog.innerHTML = h;
+    }
   }
 
   setAngle(a) {
@@ -895,10 +1216,14 @@ export class UI {
   setTimer(t) {
     const v = Math.max(0, Math.ceil(t));
     if (t > this._timerMax) this._timerMax = t;
+    this._lastT = t;
     this.el.timer.textContent = v;
     const frac = Math.max(0, Math.min(1, t / this._timerMax));
+    // Remaining arc from 12 o'clock; spent arc stays as dim ghost dashes.
+    const live = t <= 5 ? '#ff5b4d' : this._rivalTurn ? '#ff8a5e' : 'var(--gold)';
+    const spent = this._rivalTurn ? 'rgba(255,138,94,0.22)' : 'rgba(255,215,94,0.22)';
     this.el.timerRing.style.background =
-      `conic-gradient(${t <= 5 ? '#ff5b4d' : 'var(--gold)'} 0turn ${frac}turn, #23283f ${frac}turn 1turn)`;
+      `conic-gradient(${live} 0turn ${frac}turn, ${spent} ${frac}turn 1turn)`;
     this.el.timerRing.classList.toggle('low', t <= 5 && t > 0);
   }
 
@@ -907,7 +1232,11 @@ export class UI {
     if (/^-\d+$/.test(text)) { this.showDamage(text); return; }
     // GunBound-style shouty banners: "You's turn" -> "YOUR TURN".
     const m = /^(.+)'s turn$/i.exec(text);
-    if (m) text = m[1].toLowerCase() === 'you' ? 'YOUR TURN' : `${m[1].toUpperCase()}'S TURN`;
+    if (m) {
+      const isYou = m[1].toLowerCase() === 'you';
+      text = isYou ? 'YOUR TURN' : `${m[1].toUpperCase()}'S TURN`;
+      this._setTurnOwner(isYou, m[1]);
+    }
     this.el.bStroke.textContent = text;
     this.el.bFill.textContent = text;
     // retrigger pop animation
@@ -926,6 +1255,25 @@ export class UI {
         else this._bRaf = requestAnimationFrame(step);
       };
       this._bRaf = requestAnimationFrame(step);
+    }
+  }
+
+  // Console hand-off: on the rival's turn the console visibly stands down
+  // (dim + WAIT + red clock) and the active player's HP card gets an edge
+  // glow — blue for you, red for the rival.
+  _setTurnOwner(isYou, activeName) {
+    this._rivalTurn = !isYou;
+    this.el.console.classList.toggle('waiting', !isYou);
+    this.el.fireLabel.textContent = isYou ? 'FIRE' : 'WAIT';
+    this.el.timerRing.classList.toggle('rival', !isYou);
+    if (this._lastT != null) this.setTimer(this._lastT);
+    for (const [n, c] of this._cards) {
+      c.card.classList.toggle('activeYou', isYou && n === activeName);
+      c.card.classList.toggle('activeRival', !isYou && n === activeName);
+    }
+    if (isYou && this.el.roundNum) {
+      this._round += 1;
+      this.el.roundNum.textContent = this._round;
     }
   }
 

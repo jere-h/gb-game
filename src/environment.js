@@ -71,6 +71,7 @@ export class Environment {
         cBelow: { value: new THREE.Color('#79bede') },
         cWarm: { value: new THREE.Color('#ffdca4') },
         uSun: { value: new THREE.Vector2(760, 1040) },
+        uSunVis: { value: 1 },
       },
       vertexShader: `
         varying vec3 vW;
@@ -82,6 +83,7 @@ export class Environment {
       fragmentShader: `
         uniform vec3 cTop, cMid, cHorizon, cBelow, cWarm;
         uniform vec2 uSun;
+        uniform float uSunVis;
         varying vec3 vW;
         void main() {
           float y = vW.y;
@@ -92,8 +94,10 @@ export class Environment {
           float sunSide = 0.6 + 0.4 * exp(-abs(vW.x - uSun.x) / 1600.0);
           col += cWarm * exp(-abs(y - 140.0) * 0.0038) * 0.4 * sunSide;
           // Soft wide halo around the sun itself (bloom pass amplifies).
+          // uSunVis fades it out when the sun is hidden behind terrain, so
+          // no orphaned glow sliver ever peeks around an island edge.
           float d = length(vW.xy - uSun);
-          col += cWarm * exp(-d / 300.0) * 0.22;
+          col += cWarm * exp(-d / 300.0) * 0.22 * uSunVis;
           gl_FragColor = vec4(col, 1.0);
         }`,
       depthWrite: false,
@@ -106,8 +110,10 @@ export class Environment {
   }
 
   buildSun() {
-    // Warm painted sun: soft gold halo, 8 faint rays, warm-white core — one
-    // sprite so clouds (drawn later) always occlude disc + halo together.
+    // Warm painted sun: soft gold halo + warm-white core — one sprite so
+    // clouds (drawn later) always occlude disc + halo together. Purely
+    // radial: no polygon ray spikes, which read as lens-flare artifacts
+    // when the disc is partially hidden behind clouds or an island.
     // Normal blending keeps it from nuking to pure white over the sky, which
     // also tames how hard the bloom pass grabs it.
     const c = document.createElement('canvas');
@@ -122,25 +128,6 @@ export class Environment {
     g.addColorStop(1.0, 'rgba(255,200,110,0)');
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, 256, 256);
-
-    // Eight soft tapered rays, alternating long/short.
-    ctx.save();
-    ctx.translate(128, 128);
-    for (let i = 0; i < 8; i++) {
-      ctx.rotate(Math.PI / 4);
-      const len = i % 2 === 0 ? 108 : 78;
-      const rg = ctx.createLinearGradient(0, 0, len, 0);
-      rg.addColorStop(0, 'rgba(255,228,150,0.28)');
-      rg.addColorStop(1, 'rgba(255,228,150,0)');
-      ctx.fillStyle = rg;
-      ctx.beginPath();
-      ctx.moveTo(24, 0);
-      ctx.lineTo(len, -4.5);
-      ctx.lineTo(len, 4.5);
-      ctx.closePath();
-      ctx.fill();
-    }
-    ctx.restore();
 
     // Core disc: warm white center, gold rim, quick soft falloff.
     g = ctx.createRadialGradient(128, 128, 0, 128, 128, 80);
@@ -162,7 +149,34 @@ export class Environment {
     // just the resting spot before the first camera update.
     this.sun.position.set(620, 760, -1400);
     this.sun.renderOrder = -9;
+    this._sunVis = 1; // smoothed 0..1 visibility (occlusion fade)
     this.group.add(this.sun);
+  }
+
+  // Occlusion-fade the sun behind terrain (the floating islands): sample the
+  // terrain solidity mask where the camera->sun sight lines cross the terrain
+  // plane (z=0), across the disc core, and ease opacity toward the uncovered
+  // fraction (~200ms). Kills the "orphaned glow sliver peeking around an
+  // island edge" artifact while letting clouds keep their natural soft cover.
+  _sunOcclusion(cam) {
+    const terrain = typeof window !== 'undefined' && window.__GB
+      ? window.__GB.terrain : null;
+    if (!terrain || !terrain.isSolid) return 1;
+    const S = this.sun.position;
+    const u = cam.position.z / (cam.position.z - S.z); // param where ray hits z=0
+    if (!(u > 0 && u < 1)) return 1;
+    let covered = 0, total = 0;
+    for (const [dx, dy, w] of [
+      [0, 0, 3],
+      [45, 0, 1], [-45, 0, 1], [0, 45, 1], [0, -45, 1],
+      [64, 64, 1], [-64, 64, 1], [64, -64, 1], [-64, -64, 1],
+    ]) {
+      const wx = cam.position.x + u * (S.x + dx - cam.position.x);
+      const wy = cam.position.y + u * (S.y + dy - cam.position.y);
+      total += w;
+      if (terrain.isSolid(wx, wy)) covered += w;
+    }
+    return Math.max(0, 1 - (covered / total) * 2.2);
   }
 
   // Keep the sun near-fixed in screen space (a distant light source, not a
@@ -378,15 +392,27 @@ export class Environment {
 
   buildHaze() {
     // Soft white band hovering at the horizon, in front of the mountains.
+    // Painted, not stamped: the band's top edge undulates (two low-frequency
+    // sines + drift, so no readable repeat) and every column's alpha ramps in
+    // over ~70px, so it melts into the sky instead of terminating in a
+    // straight full-width line.
+    const W = 1024, H = 256;
     const c = document.createElement('canvas');
-    c.width = 32; c.height = 256;
+    c.width = W; c.height = H;
     const ctx = c.getContext('2d');
-    const g = ctx.createLinearGradient(0, 0, 0, 256);
-    g.addColorStop(0.0, 'rgba(235,246,255,0)');
-    g.addColorStop(0.5, 'rgba(235,246,255,0.3)');
-    g.addColorStop(1.0, 'rgba(235,246,255,0)');
-    ctx.fillStyle = g;
-    ctx.fillRect(0, 0, 32, 256);
+    for (let x = 0; x < W; x++) {
+      const topY = 58
+        + Math.sin(x * 0.0104 + 1.3) * 9
+        + Math.sin(x * 0.0037 + 4.1) * 7
+        + Math.sin(x * 0.031 + 0.6) * 2.5;
+      const g = ctx.createLinearGradient(0, topY, 0, H);
+      g.addColorStop(0.0, 'rgba(235,246,255,0)');
+      g.addColorStop(0.38, 'rgba(235,246,255,0.3)');
+      g.addColorStop(0.62, 'rgba(235,246,255,0.26)');
+      g.addColorStop(1.0, 'rgba(235,246,255,0)');
+      ctx.fillStyle = g;
+      ctx.fillRect(x, 0, 1, H);
+    }
     const tex = new THREE.CanvasTexture(c);
     const m = new THREE.Mesh(
       new THREE.PlaneGeometry(WORLD_W * 3, 380),
@@ -429,15 +455,24 @@ export class Environment {
     for (const L of lobes) { ctx.moveTo(L.x + L.r, L.y); ctx.arc(L.x, L.y, L.r, 0, Math.PI * 2); }
     ctx.fill();
 
-    // Gently wavy flat bottom.
+    // Bowed flat-ish bottom: the cut line sags 5-9px toward the middle with a
+    // gentle wobble, erased in three passes of rising transparency so the edge
+    // reads brushed, never razor-cut.
+    const bow = 5 + rng() * 4;
+    const ph = rng() * Math.PI * 2;
+    const cutY = (x) =>
+      baseY + 2 + Math.sin((x / w) * Math.PI) * bow + Math.sin(x * 0.035 + ph) * 2.2;
     ctx.save();
     ctx.globalCompositeOperation = 'destination-out';
-    ctx.beginPath();
-    ctx.moveTo(0, h);
-    for (let x = 0; x <= w; x += 8) ctx.lineTo(x, baseY + 2 + Math.sin(x * 0.05 + rng()) * 3);
-    ctx.lineTo(w, h);
-    ctx.closePath();
-    ctx.fill();
+    for (const [dy, a] of [[0, 1], [-2.5, 0.45], [-5, 0.18]]) {
+      ctx.globalAlpha = a;
+      ctx.beginPath();
+      ctx.moveTo(0, h);
+      for (let x = 0; x <= w; x += 6) ctx.lineTo(x, cutY(x) + dy);
+      ctx.lineTo(w, h);
+      ctx.closePath();
+      ctx.fill();
+    }
     ctx.restore();
 
     // Shaded underside.
@@ -449,6 +484,16 @@ export class Environment {
     g.addColorStop(1, 'rgba(140,166,210,0.48)');
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, w, h);
+    // Cool blue band hugging the bowed cut so the underside reads painted.
+    ctx.strokeStyle = 'rgba(122,152,204,0.34)';
+    ctx.lineWidth = 9;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    for (let x = -6; x <= w + 6; x += 6) {
+      const y = cutY(Math.max(0, Math.min(w, x))) - 3;
+      if (x === -6) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
     // Warm top-light.
     g = ctx.createLinearGradient(0, 0, 0, baseY);
     g.addColorStop(0, 'rgba(255,252,238,0.5)');
@@ -591,20 +636,23 @@ export class Environment {
           float d = edge - y;                 // depth below the surface
           if (d < 0.0) discard;
 
-          // Stacked cyan tones darkening with depth.
+          // Stacked cyan tones darkening with depth — compressed so the
+          // bright-cyan -> deep-teal ramp is readable inside the shallow
+          // band the camera actually sees, not spread over off-screen depth.
           vec3 c0 = vec3(0.36, 0.79, 0.92);
           vec3 c1 = vec3(0.13, 0.54, 0.79);
           vec3 c2 = vec3(0.03, 0.19, 0.45);
-          vec3 col = mix(c0, c1, smoothstep(0.0, 130.0, d));
-          col = mix(col, c2, smoothstep(100.0, 520.0, d));
+          vec3 col = mix(c0, c1, smoothstep(0.0, 70.0, d));
+          col = mix(col, c2, smoothstep(40.0, 235.0, d));
 
           // Broad slow horizontal tone bands (depth-wise, never vertical).
           col += 0.04 * sin(d * 0.05 - uTime * 0.5) * vec3(0.5, 0.8, 1.0);
 
-          // Two layers of scrolling horizontal highlight streaks.
+          // Two layers of scrolling horizontal highlight streaks, moving at
+          // different speeds so the surface visibly lives.
           float s1 = streaks(vec2(x - uTime * 24.0, d), vec2(220.0, 30.0), 0.0);
           float s2 = streaks(vec2(x + uTime * 11.0, d), vec2(120.0, 20.0), 31.7);
-          float sInt = min(0.45, (s1 * 0.42 + s2 * 0.32) * exp(-d * 0.005));
+          float sInt = min(0.55, (s1 * 0.55 + s2 * 0.42) * exp(-d * 0.004));
           col = mix(col, vec3(0.74, 0.95, 1.0), sInt);
 
           // Shoreline foam: crisp bright line at the surface over a soft
@@ -667,7 +715,16 @@ export class Environment {
       // debug hook so the frozen Environment API stays untouched.
       const cam = typeof window !== 'undefined' && window.__GB && window.__GB.world
         ? window.__GB.world.camera : null;
-      if (cam) this._placeSun(cam);
+      if (cam) {
+        this._placeSun(cam);
+        // Ease visibility toward the occlusion target (~200ms fade).
+        const target = this._sunOcclusion(cam);
+        const k = 1 - Math.exp(-(dt || 0.016) * 9);
+        this._sunVis += (target - this._sunVis) * k;
+        this.sun.material.opacity = this._sunVis;
+        this.sun.visible = this._sunVis > 0.02;
+        if (this.skyMat) this.skyMat.uniforms.uSunVis.value = this._sunVis;
+      }
     }
   }
 }
