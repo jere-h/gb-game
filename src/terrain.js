@@ -34,6 +34,71 @@ const CHAR_DEEP = [42, 33, 26];
 const LIP = [46, 30, 20];
 const LIP_CHAR = [22, 14, 10];
 
+// --- deterministic 1D value noise -------------------------------------------
+// One shared permutation table per seed; `off` picks an independent channel.
+// n(x) is C1-smooth value noise with unit wavelength; .fbm/.ridged stack it.
+function makeNoise1(rng) {
+  const N = 1024;
+  const P = new Float32Array(N);
+  for (let i = 0; i < N; i++) P[i] = rng();
+  const at = (i) => P[(((i % N) + N) % N)];
+  const n = (x, off = 0) => {
+    const xi = Math.floor(x);
+    const f = x - xi;
+    const u = f * f * (3 - 2 * f);
+    const a = at(xi + off), b = at(xi + 1 + off);
+    return a + (b - a) * u;
+  };
+  n.fbm = (x, oct = 4, off = 0) => {
+    let a = 0.5, f = 1, s = 0, nm = 0;
+    for (let i = 0; i < oct; i++) { s += a * n(x * f, off + i * 61); nm += a; a *= 0.5; f *= 2.13; }
+    return s / nm;
+  };
+  // Ridged multifractal: 1-|noise| squared, so crests are sharp creases and
+  // valleys are broad — the signature of eroded rock rather than a sine hill.
+  n.ridged = (x, oct = 3, off = 0) => {
+    let a = 0.6, f = 1, s = 0, nm = 0;
+    for (let i = 0; i < oct; i++) {
+      const v = 1 - Math.abs(2 * n(x * f, off + i * 37) - 1);
+      s += a * v * v; nm += a; a *= 0.5; f *= 2.31;
+    }
+    return s / nm;
+  };
+  return n;
+}
+
+const smoothstep = (t) => t * t * (3 - 2 * t);
+
+// Segment easings for the authored macro profile. `cliff` compresses the whole
+// transition into ~1/6 of the span, so a 24px span becomes a ~4px vertical
+// face; `bench` lands the step then holds, `scoop` digs a concave gorge floor.
+const EASE = {
+  smooth: smoothstep,
+  flat: smoothstep,
+  linear: (t) => t,
+  cliff: (t) => clamp((t - 0.5) * 6 + 0.5, 0, 1),
+  scarp: (t) => { const u = clamp((t - 0.35) * 2.6, 0, 1); return smoothstep(u); },
+  scoop: (t) => t * t,
+  dome: (t) => 1 - (1 - t) * (1 - t),
+  bench: (t) => smoothstep(clamp(t * 1.9, 0, 1)),
+};
+
+// Sedimentary recipes. `spec` = fine speckle density, `grit` = pebble/gravel
+// density, `lam` = bedding lamination strength. Density is a property of the
+// LAYER, which is what makes the scatter statistically non-uniform.
+const ROCKS = {
+  silt:   { col: [206, 176, 124], spec: 0.55, grit: 0.00, lam: 0.55, rough: 0.25 },
+  sand:   { col: [186, 140, 82],  spec: 1.00, grit: 0.22, lam: 0.30, rough: 0.5 },
+  clay:   { col: [126, 84, 50],   spec: 0.22, grit: 0.00, lam: 0.12, rough: 0.15 },
+  shale:  { col: [84, 64, 48],    spec: 0.20, grit: 0.05, lam: 1.00, rough: 0.2 },
+  ochre:  { col: [180, 104, 48],  spec: 0.70, grit: 0.10, lam: 0.22, rough: 0.35 },
+  rust:   { col: [166, 82, 50],   spec: 0.5,  grit: 0.15, lam: 0.35, rough: 0.4 },
+  gravel: { col: [142, 110, 78],  spec: 0.65, grit: 1.00, lam: 0.00, rough: 0.8 },
+  basalt: { col: [72, 64, 62],    spec: 0.18, grit: 0.35, lam: 0.00, rough: 0.6 },
+  marl:   { col: [162, 136, 96],  spec: 0.45, grit: 0.05, lam: 0.7, rough: 0.3 },
+  green:  { col: [112, 116, 86],  spec: 0.35, grit: 0.08, lam: 0.6, rough: 0.3 },
+};
+
 // --- painterly props ---------------------------------------------------------
 
 function drawRock(ctx, x, y, r, rng, depthT = 0.5) {
@@ -204,45 +269,40 @@ export class Terrain {
     this.scorchY = new Float32Array(w);  // canvas y of the blast that charred this column
     this.edgeHash = new Int32Array(w);   // (kept for compat; repaints are now range-forced)
     this.paintHash = new Int32Array(w);  // (kept for compat)
+    // Latest sod geometry per column (top edge, thickness, surface gradient),
+    // shared between the sod painter, the seam painter and the tuft placer.
+    this._sodTop = new Float32Array(w);
+    this._sodD = new Float32Array(w);
+    this._sodSlope = new Float32Array(w);
 
     // Deterministic noise phases for grass color / depth variation.
     this._np = [rng() * Math.PI * 2, rng() * Math.PI * 2, rng() * Math.PI * 2, rng() * Math.PI * 2];
     this._hs = rng() * 100;
 
-    // Height field: non-harmonic rolling octaves + a few big feature hills
-    // (one of them a valley) so the skyline reads asymmetric and hand-made.
-    const phases = Array.from({ length: 5 }, () => rng() * Math.PI * 2);
-    const amps = [64, 40, 24, 12, 7].map((a) => a * (0.7 + rng() * 0.6));
-    const fm = [1.0, 2.17, 3.93, 6.71, 11.3];
-    const base = 250 + rng() * 70;
-    const hills = [];
-    for (let i = 0; i < 3; i++) {
-      hills.push({
-        p: w * (0.1 + 0.8 * ((i + 0.15 + rng() * 0.7) / 3)),
-        a: (i === 1 ? -(0.6 + rng() * 0.5) : 0.9 + rng() * 0.9) * (70 + rng() * 70),
-        s: 130 + rng() * 220,
-      });
-    }
-    this._baseH = base;
+    // Deterministic value noise used by the height field and the painters.
+    this._nz = makeNoise1(rng);
+
+    // Height field: authored macro landforms (platforms / mesa / gorge /
+    // terraces) + ridged fractal detail + thermal erosion + hard cliff faces.
+    this.buildHeightField(rng);
+    const H = this._H;
     const heightAt = (x) => {
-      let y = base;
-      for (let i = 0; i < 5; i++) {
-        y += amps[i] * Math.sin((x / w) * Math.PI * 2 * fm[i] + phases[i]);
-      }
-      for (const hl of hills) {
-        const dx = (x - hl.p) / hl.s;
-        y += hl.a * Math.exp(-dx * dx);
-      }
-      return clamp(y, 150, 640);
+      const t = clamp(x, 0, w);
+      const i = t | 0;
+      const f = t - i;
+      const a = H[i], b = H[Math.min(w, i + 1)];
+      return a + (b - a) * f;
     };
     this.groundHeightFn = heightAt;
 
     // Silhouette path (canvas y is down; ground occupies bottom of canvas).
+    // Sampled per pixel: the cliff faces are only a few px wide and a coarser
+    // step would round them back into slopes.
     const path = new Path2D();
     path.moveTo(-6, h + 6);
-    path.lineTo(-6, h - heightAt(0));
-    for (let x = 0; x <= w; x += 3) path.lineTo(x, h - heightAt(x));
-    path.lineTo(w + 6, h - heightAt(w));
+    path.lineTo(-6, h - H[0]);
+    for (let x = 0; x <= w; x++) path.lineTo(x, h - H[x]);
+    path.lineTo(w + 6, h - H[w]);
     path.lineTo(w + 6, h + 6);
     path.closePath();
 
@@ -251,7 +311,7 @@ export class Terrain {
       // Floating island: gently domed grassy top, lumpy rounded rocky belly.
       const iw2 = 290 + rng() * 90;
       const icx = w / 2 + (rng() - 0.5) * 300;
-      const topY = h - (base + 410 + rng() * 130);
+      const topY = h - (this._baseH + 410 + rng() * 130);
       const wob = rng() * Math.PI * 2;
       path.moveTo(icx - iw2, topY + 24);
       for (let t = 0; t <= 1.001; t += 1 / 48) {
@@ -333,6 +393,292 @@ export class Terrain {
     this.paintShoreline(rng);
   }
 
+  // --- height field ----------------------------------------------------------
+  //
+  // Four stages, in order:
+  //   1. authored macro profile — a chain of control nodes describing named
+  //      landforms (spawn platforms, mesa + plateau, gorge, stepped terraces,
+  //      ridge). Segment easings decide whether a transition is a slope, a
+  //      bench or a near-vertical cliff face.
+  //   2. ridged fractal detail — 1-|noise| squared, three octaves, with the
+  //      base frequency itself modulated by a slow noise so the left third of
+  //      the map is not the same "grain" as the right third. Amplitude is
+  //      scaled per segment, so platforms stay flat and slopes get rugged.
+  //   3. thermal erosion — a few hundred relaxation passes at a ~40 degree
+  //      talus angle. Crests get chipped, slopes turn into straight scree
+  //      faces, and material piles up at the bottom of every drop.
+  //   4. hard features — rock outcrops with near-vertical flanks, talus cones
+  //      at the foot of each cliff, and a re-flattening of the firing
+  //      platforms so the mobiles always get level ground.
+  //
+  // Columns marked in `_rock` are excluded from erosion and smoothing, which
+  // is what lets a cliff survive stage 3.
+  buildHeightField(rng) {
+    const w = this.w;
+    const N = w + 1;
+    const nz = this._nz;
+    const H = new Float32Array(N);
+    const rough = new Float32Array(N);
+    const rock = new Uint8Array(N);
+    const flatY = new Float32Array(N);
+    const flatW = new Float32Array(N);
+
+    const nodes = [];
+    const add = (x, y, ease = 'smooth', rg = 0.85) => nodes.push({ x, y, ease, rg });
+
+    // Firing platforms straddle the two spawn columns (canvas x 480 / 1920).
+    // Mirroring the whole field maps one onto the other, so both stay level.
+    const pA = 264 + rng() * 80;
+    const pB = 252 + rng() * 96;
+
+    add(0, pA + 24 + rng() * 54, 'smooth', 0.9);
+    add(300, pA + 5, 'smooth', 0.55);
+    add(385, pA, 'flat', 0.10);
+    add(600, pA + (rng() - 0.5) * 7, 'flat', 0.10);
+
+    // --- landform templates ---------------------------------------------
+    const feat = {
+      // Deep gorge: scalloped descent, flat scoured floor, sheer wall out.
+      gorge(xa, xb, ya) {
+        const L = xb - xa;
+        const floor = 156 + rng() * 36;
+        add(xa + L * 0.12, ya - 12, 'smooth', 0.55);
+        add(xa + L * 0.30, floor + 30, 'scarp', 0.30);
+        add(xa + L * 0.37, floor, 'scoop', 0.20);
+        add(xa + L * 0.53, floor + rng() * 9, 'flat', 0.18);
+        add(xa + L * 0.60, floor + 34, 'smooth', 0.30);
+        add(xa + L * 0.62 + 26, floor + 150 + rng() * 66, 'cliff', 0.0);
+        add(xa + L * 0.80, floor + 168 + rng() * 44, 'flat', 0.30);
+        const yE = 236 + rng() * 130;
+        add(xb, yE, 'smooth', 0.85);
+        return yE;
+      },
+      // Mesa: one big vertical cliff up to a level plateau, then two ledges
+      // stepping back down (Miramo's stacked tables).
+      mesa(xa, xb, ya) {
+        const L = xb - xa;
+        const top = ya + 150 + rng() * 118;
+        add(xa + L * 0.15, ya + 10, 'smooth', 0.7);
+        add(xa + L * 0.15 + 24, top - 34, 'cliff', 0.0);
+        add(xa + L * 0.23, top, 'bench', 0.28);
+        add(xa + L * 0.55, top + (rng() - 0.5) * 9, 'flat', 0.14);
+        add(xa + L * 0.55 + 22, top - 58 - rng() * 24, 'cliff', 0.0);
+        add(xa + L * 0.70, top - 70, 'flat', 0.22);
+        add(xa + L * 0.70 + 22, top - 138 - rng() * 30, 'cliff', 0.0);
+        const yE = ya + 16 + rng() * 74;
+        add(xb, yE, 'smooth', 0.85);
+        return yE;
+      },
+      // Staircase of benches — reads as quarried rock terraces.
+      terrace(xa, xb, ya) {
+        const L = xb - xa;
+        const steps = 3 + ((rng() * 2) | 0);
+        const dir = rng() < 0.5 ? 1 : -1;
+        const rise = (70 + rng() * 46) * dir;
+        let y = ya;
+        for (let s = 0; s < steps; s++) {
+          const x0 = xa + L * ((s + 0.12) / steps);
+          y += rise * (0.7 + rng() * 0.6);
+          add(x0, y, 'cliff', 0.0);
+          add(xa + L * ((s + 0.9) / steps), y + (rng() - 0.5) * 10, 'flat', 0.2);
+        }
+        const yE = clamp(y + (rng() - 0.5) * 50, 190, 560);
+        add(xb, yE, 'smooth', 0.8);
+        return yE;
+      },
+      // Rugged ridge: broad rise, jagged crest (high roughness), sheer drop
+      // off the far side.
+      ridge(xa, xb, ya) {
+        const L = xb - xa;
+        const crest = ya + 130 + rng() * 130;
+        add(xa + L * 0.10, ya + 24, 'smooth', 0.9);
+        add(xa + L * 0.42, crest, 'smooth', 1.35);
+        add(xa + L * 0.58, crest - 14, 'smooth', 1.45);
+        add(xa + L * 0.58 + 26, crest - 122 - rng() * 60, 'cliff', 0.0);
+        add(xa + L * 0.74, crest - 150 - rng() * 40, 'smooth', 0.7);
+        const yE = 210 + rng() * 120;
+        add(xb, yE, 'smooth', 0.9);
+        return yE;
+      },
+    };
+
+    // Two DIFFERENT templates for the two middle slots, so the halves of the
+    // map never share a character.
+    const kinds = ['gorge', 'mesa', 'terrace', 'ridge'];
+    for (let i = kinds.length - 1; i > 0; i--) {
+      const j = (rng() * (i + 1)) | 0;
+      const t = kinds[i]; kinds[i] = kinds[j]; kinds[j] = t;
+    }
+    let y = pA;
+    y = feat[kinds[0]](600, 1180, y);
+    y = feat[kinds[1]](1180, 1800, y);
+    add(1800, pB, 'smooth', 0.5);
+    add(2015, pB + (rng() - 0.5) * 7, 'flat', 0.10);
+    // Right shoulder: a final rise with a cliff so the map edge is not a fade.
+    add(2140, pB + 40 + rng() * 40, 'smooth', 0.8);
+    add(2270, pB + 60 + rng() * 60, 'smooth', 1.1);
+    add(2294, pB + 150 + rng() * 90, 'cliff', 0.0);
+    add(w, pB + 170 + rng() * 90, 'flat', 0.4);
+
+    nodes.sort((a, b) => a.x - b.x);
+
+    // --- stage 1: rasterise the node chain -------------------------------
+    for (let s = 0; s < nodes.length - 1; s++) {
+      const a = nodes[s], b = nodes[s + 1];
+      const x0 = clamp(Math.round(a.x), 0, w);
+      const x1 = clamp(Math.round(b.x), 0, w);
+      const span = Math.max(1, b.x - a.x);
+      const e = EASE[b.ease] || EASE.smooth;
+      const hard = b.ease === 'cliff' || b.ease === 'scarp';
+      for (let x = x0; x <= x1; x++) {
+        const t = clamp((x - a.x) / span, 0, 1);
+        H[x] = a.y + (b.y - a.y) * e(t);
+        rough[x] = b.rg;
+        if (hard) rock[x] = 1;
+      }
+      if (b.ease === 'flat') {
+        for (let x = x0; x <= x1; x++) {
+          const t = clamp(Math.min(x - x0, x1 - x) / 48, 0, 1);
+          flatY[x] = a.y + (b.y - a.y) * ((x - a.x) / span);
+          flatW[x] = Math.max(flatW[x], smoothstep(t));
+        }
+      }
+    }
+
+    // --- stage 2: ridged fractal detail ----------------------------------
+    // Base wavelength wanders 60-260px across the map, so the silhouette
+    // "grain" is visibly different from one third to the next.
+    for (let x = 0; x <= w; x++) {
+      const rg = rough[x];
+      if (rg <= 0.02) continue;
+      const fs = 0.5 + 1.8 * nz(x / 760, 311);
+      const r = nz.ridged((x * fs) / 130, 3, 500);
+      const u = nz.fbm(x / 430, 3, 900) - 0.5;
+      H[x] += (r - 0.42) * 54 * rg + u * 46 * rg;
+      H[x] += (nz(x / 23, 1300) - 0.5) * 8 * rg;
+    }
+
+    // --- stage 3: thermal erosion ----------------------------------------
+    const talus = 0.86; // ~40 degrees at 1px column spacing
+    for (let it = 0; it < 200; it++) {
+      for (let i = 0; i < w; i++) {
+        if (rock[i] || rock[i + 1]) continue;
+        const d = H[i] - H[i + 1];
+        if (d > talus) { const m = (d - talus) * 0.25; H[i] -= m; H[i + 1] += m; }
+        else if (d < -talus) { const m = (-d - talus) * 0.25; H[i] += m; H[i + 1] -= m; }
+      }
+    }
+
+    // --- stage 4a: rock outcrops -----------------------------------------
+    // Narrow flat-topped knobs with near-vertical flanks; kept clear of the
+    // firing platforms so a mobile is never walled in on its own ledge.
+    const nOut = 3 + ((rng() * 3) | 0);
+    for (let i = 0; i < nOut; i++) {
+      const cx = 180 + rng() * (w - 360);
+      if (Math.abs(cx - 480) < 230 || Math.abs(cx - 1920) < 230) continue;
+      const rw = 20 + rng() * 44;
+      const hgt = 18 + rng() * 34;
+      for (let x = Math.floor(cx - rw - 4); x <= Math.ceil(cx + rw + 4); x++) {
+        if (x < 0 || x > w) continue;
+        const t = Math.abs(x - cx) / rw;
+        if (t > 1.05) continue;
+        const p = Math.pow(clamp(1 - Math.pow(t, 5.5), 0, 1), 0.5);
+        H[x] += hgt * p * (0.82 + 0.34 * nz(x / 9, 700));
+        if (p > 0.3) rock[x] = 1;
+      }
+    }
+
+    // --- stage 4b: break the cliff faces ---------------------------------
+    // A cliff produced by an easing curve is a razor-straight wall with square
+    // corners — the fastest way to read "generated". Each face is rebuilt as a
+    // short jittered staircase of 2-4 blocks (treads a few px wide, risers of
+    // uneven height) so the wall breaks up and the top corner gets chipped.
+    const faces = [];
+    for (let x = 1; x <= w; x++) {
+      const d = H[x] - H[x - 1];
+      if (Math.abs(d) < 11) continue;
+      let x2 = x;
+      while (x2 < w && Math.abs(H[x2 + 1] - H[x2]) >= 5) x2++;
+      faces.push([x - 1, x2]);
+      x = x2 + 1;
+    }
+    for (const [fa, fb] of faces) {
+      const ya = H[fa], yb = H[fb];
+      if (Math.abs(yb - ya) < 40) continue;
+      const steps = 2 + ((rng() * 3) | 0);
+      const width = Math.round(9 + steps * 4 + rng() * 12);
+      const nxa = clamp(Math.round((fa + fb) / 2 - width / 2), 1, w - 2);
+      const nxb = clamp(nxa + width, 2, w);
+      const n = Math.max(1, nxb - nxa);
+      const riser = [];
+      let tot = 0;
+      for (let s = 0; s < steps; s++) { const f = 0.4 + rng(); riser.push(f); tot += f; }
+      let cum = 0;
+      const hc = riser.map((f) => (cum += f / tot));
+      const tp = [];
+      for (let s = 0; s < steps; s++) tp.push((s + 0.3 + rng() * 0.45) / steps);
+      for (let i = 0; i <= n; i++) {
+        const t = i / n;
+        let f = 0;
+        for (let s = 0; s < steps; s++) if (t >= tp[s]) f = hc[s];
+        const jx = nxa + i;
+        if (jx < 0 || jx > w) continue;
+        H[jx] = ya + (yb - ya) * f + (nz(jx / 3.5, 1450) - 0.5) * 5;
+        rock[jx] = 1;
+      }
+    }
+
+    // --- stage 4c: talus cones at the foot of every drop -----------------
+    const drops = [];
+    for (let x = 1; x < w; x++) {
+      const d = H[x] - H[x - 1];
+      if (Math.abs(d) > 20) { drops.push([x, d]); x += 3; }
+    }
+    for (const [x, d] of drops) {
+      const dir = d > 0 ? -1 : 1;
+      const len = 24 + rng() * 46;
+      const amt = Math.min(24, Math.abs(d) * 0.24);
+      for (let j = 1; j <= len; j++) {
+        const xx = x + dir * j;
+        if (xx < 0 || xx > w) break;
+        if (rock[xx]) continue;
+        H[xx] += amt * Math.pow(1 - j / len, 1.7) * (0.7 + 0.6 * nz(xx / 14, 820));
+      }
+    }
+
+    // --- stage 4d: re-level the firing platforms, gentle final smooth ----
+    for (let x = 0; x <= w; x++) {
+      if (flatW[x] > 0) H[x] += (flatY[x] - H[x]) * flatW[x] * 0.84;
+    }
+    const tmp = Float32Array.from(H);
+    for (let x = 1; x < w; x++) {
+      if (rock[x] || rock[x - 1] || rock[x + 1]) continue;
+      H[x] = (tmp[x - 1] + tmp[x] * 2 + tmp[x + 1]) * 0.25;
+    }
+    // De-spike: kill 1-3px needles left behind by ridged crests meeting a
+    // protected column. A real plateau keeps its height 3px away, a needle
+    // does not, so this trims the needles and leaves every ledge alone.
+    for (let x = 2; x < w - 1; x++) {
+      const nb = Math.max(H[x - 2], H[x + 2]);
+      if (H[x] > nb + 26) H[x] = nb + 26;
+    }
+    for (let x = 0; x <= w; x++) H[x] = clamp(H[x], 152, 668);
+
+    // Half the maps read right-to-left. Mirroring after the fact keeps the
+    // firing platforms exactly where the spawns are.
+    if (rng() < 0.5) {
+      for (let x = 0; x < N >> 1; x++) {
+        const j = w - x;
+        let t = H[x]; H[x] = H[j]; H[j] = t;
+        t = rock[x]; rock[x] = rock[j]; rock[j] = t;
+      }
+    }
+
+    this._H = H;
+    this._rock = rock;
+    this._baseH = (H[0] + H[w >> 1] + H[w]) / 3;
+  }
+
   // Wet-sand transition where the dirt body plunges into the sea: a wavy
   // darkened band that cools toward deep teal at the very edge, topped by an
   // irregular white foam scallop line (randomized bump widths/heights, no
@@ -395,12 +741,22 @@ export class Terrain {
   }
 
   // Dirt/rock fill inside the clipped silhouette.
+  //
+  // The layer stack is built INDEPENDENTLY of the ground profile: each bedding
+  // boundary is its own low-frequency fold curve plus a global tilt, the stack
+  // is offset across a fault plane, and a few layers pinch out to nothing
+  // (unconformity wedges). Because everything is painted inside the silhouette
+  // clip, the ground TRUNCATES the layers instead of the layers following the
+  // ground. Only the thin soil mantle drapes over the surface, as soil does.
   paintStrata(ctx, rng) {
     const { w, h } = this;
+    const nz = this._nz;
     const hAt = this.groundHeightFn;
+    const TAU = Math.PI * 2;
 
-    // Base: warm topsoil grading into dark rock.
-    const g = ctx.createLinearGradient(0, h - 700, 0, h);
+    // Base tone. Mostly covered by the stack; shows through where a wedge
+    // pinches the stack thin.
+    const g = ctx.createLinearGradient(0, h - 780, 0, h);
     g.addColorStop(0, '#9f7c54');
     g.addColorStop(0.3, '#8a6544');
     g.addColorStop(0.58, '#6f4f33');
@@ -409,32 +765,190 @@ export class Terrain {
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, w, h);
 
-    // Sunlit topsoil ribbon hugging the ground surface.
-    ctx.beginPath();
-    ctx.moveTo(0, h - hAt(0) + 26);
-    for (let x = 0; x <= w; x += 6) ctx.lineTo(x, h - hAt(x) + 26);
-    for (let x = w; x >= 0; x -= 6) ctx.lineTo(x, h - hAt(x) + 72);
-    ctx.closePath();
-    ctx.fillStyle = 'rgba(176,132,84,0.4)';
-    ctx.fill();
+    // ---------------- bedding geometry ----------------
+    const STACK_TOP = 232;
+    const tilt = (rng() < 0.5 ? -1 : 1) * (46 + rng() * 62);   // layers climb across the map
+    const A1 = 13 + rng() * 13, A2 = 5 + rng() * 7;
+    const P1 = rng() * 9, P2 = rng() * 9;
+    const faultX = w * (0.24 + rng() * 0.5);
+    const faultThrow = (rng() < 0.5 ? -1 : 1) * (18 + rng() * 30);
+    const faultLean = (rng() - 0.5) * 130;
 
-    // Compacted crust band directly under the sod: a darker, wobbly-edged
-    // 10-20px seam separating grass roots from loose topsoil.
+    // Layer recipes, biased by depth: silts and sands near the top, gravels
+    // and basalt at the bottom. Occasional thin marker beds.
+    const layers = [];
+    let depth = 0, prevName = '';
+    for (let i = 0; i < 34 && depth < 1120; i++) {
+      const dt = depth / 1040;
+      const pool = dt < 0.24 ? ['silt', 'sand', 'marl', 'clay', 'sand', 'ochre']
+        : dt < 0.62 ? ['sand', 'ochre', 'clay', 'shale', 'marl', 'gravel', 'rust', 'green']
+          : ['gravel', 'shale', 'basalt', 'clay', 'gravel', 'ochre', 'rust'];
+      // Neighbouring beds must differ in tone, or the stack merges back into
+      // one flat slab and the whole point of the layering is lost.
+      const lum = (c) => c[0] * 0.3 + c[1] * 0.59 + c[2] * 0.11;
+      let name = pool[(rng() * pool.length) | 0];
+      for (let tries = 0; tries < 6; tries++) {
+        if (name !== prevName && (!prevName || Math.abs(lum(ROCKS[name].col) - lum(ROCKS[prevName].col)) > 16)) break;
+        name = pool[(rng() * pool.length) | 0];
+      }
+      prevName = name;
+      const thin = rng() < 0.22;
+      const th = thin ? 7 + rng() * 10 : 26 + rng() * 76;
+      // Three-ish unconformity wedges: the layer tapers to zero width, so the
+      // stack is not a uniform ruled deck.
+      const pinch = (!thin && rng() < 0.24)
+        ? { c: rng() * w, hw: 190 + rng() * 430, d: 0.82 + rng() * 0.18 }
+        : null;
+      layers.push({ name, th, pinch, jit: rng() - 0.5 });
+      depth += th;
+    }
+
+    const SS = 8;
+    const M = Math.floor(w / SS) + 2;
+    const nb = layers.length + 1;
+    const B = new Float32Array(nb * M);
+    for (let s = 0; s < M; s++) {
+      const x = Math.min(w, s * SS);
+      let yy = STACK_TOP;
+      for (let li = 0; li < nb; li++) {
+        const k = li / nb;
+        const fold = tilt * (x / w - 0.5)
+          + A1 * (0.72 + 0.55 * k) * Math.sin(x / 430 + P1 + k * 0.8)
+          + A2 * Math.sin(x / 137 + P2 + k * 2.1)
+          + (nz.fbm(x / 300, 3, 40 + li * 13) - 0.5) * 15;
+        const fx = faultX + faultLean * k;
+        B[li * M + s] = yy + fold + faultThrow * clamp((x - fx) / 4, 0, 1);
+        if (li < layers.length) {
+          const L = layers[li];
+          let t = L.th;
+          if (L.pinch) {
+            const u = clamp(1 - Math.abs(x - L.pinch.c) / L.pinch.hw, 0, 1);
+            t *= 1 - smoothstep(u) * L.pinch.d;
+          }
+          yy += t;
+        }
+      }
+    }
+    const bnd = (li, x) => {
+      const s = clamp(x / SS, 0, M - 1);
+      const i = s | 0, f = s - i;
+      const a = B[li * M + i], b = B[li * M + Math.min(M - 1, i + 1)];
+      return a + (b - a) * f;
+    };
+
+    // ---------------- paint the stack ----------------
+    for (let li = 0; li < layers.length; li++) {
+      const L = layers[li];
+      const R = ROCKS[L.name];
+      const mid = (B[li * M + (M >> 1)] + B[(li + 1) * M + (M >> 1)]) * 0.5;
+      const dt = clamp((mid - STACK_TOP) / 1000, 0, 1);
+      const base = mix(R.col, [46, 32, 20], dt * 0.36);
+      const tone = [base[0] * (1 + L.jit * 0.1), base[1] * (1 + L.jit * 0.1), base[2] * (1 + L.jit * 0.11)];
+
+      const p = new Path2D();
+      p.moveTo(-10, B[li * M]);
+      for (let s = 0; s < M; s++) p.lineTo(Math.min(w, s * SS), B[li * M + s]);
+      p.lineTo(w + 10, B[li * M + M - 1]);
+      p.lineTo(w + 10, B[(li + 1) * M + M - 1]);
+      for (let s = M - 1; s >= 0; s--) p.lineTo(Math.min(w, s * SS), B[(li + 1) * M + s]);
+      p.lineTo(-10, B[(li + 1) * M]);
+      p.closePath();
+
+      ctx.save();
+      ctx.clip(p);
+      ctx.fillStyle = css(tone);
+      ctx.fillRect(-12, 0, w + 24, h);
+      // Within-bed shading: graded darker toward the base of the bed.
+      const bg = ctx.createLinearGradient(0, bnd(li, w * 0.5), 0, bnd(li + 1, w * 0.5));
+      bg.addColorStop(0, 'rgba(255,236,204,0.10)');
+      bg.addColorStop(0.45, 'rgba(0,0,0,0)');
+      bg.addColorStop(1, 'rgba(24,14,6,0.24)');
+      ctx.fillStyle = bg;
+      ctx.fillRect(-12, 0, w + 24, h);
+      this.paintBedDetail(ctx, rng, li, R, bnd, dt);
+      ctx.restore();
+
+      // Bedding plane: a wobbling dark seam on the bed's upper contact.
+      ctx.save();
+      ctx.beginPath();
+      ctx.moveTo(-10, B[li * M]);
+      for (let s = 0; s < M; s++) {
+        const x = Math.min(w, s * SS);
+        ctx.lineTo(x, B[li * M + s] + (nz(x / 26, 600 + li * 7) - 0.5) * 2.4);
+      }
+      ctx.strokeStyle = `rgba(30,18,8,${(0.16 + 0.2 * R.lam).toFixed(3)})`;
+      ctx.lineWidth = L.th < 20 ? 1 : 1.6;
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    // Fault plane: a thin dark break slicing the whole stack, with the beds
+    // already offset across it. One of the loudest "this is real rock" cues.
+    ctx.save();
+    ctx.strokeStyle = 'rgba(26,15,7,0.5)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    for (let li = 0; li <= nb - 1; li++) {
+      const k = li / nb;
+      const fx = faultX + faultLean * k + (nz(k * 7, 950) - 0.5) * 6;
+      const fy = STACK_TOP + (bnd(li, fx) - STACK_TOP);
+      if (li === 0) ctx.moveTo(fx, fy); else ctx.lineTo(fx, fy);
+    }
+    ctx.stroke();
+    ctx.restore();
+
+    // ---------------- soil mantle ----------------
+    // The ONE horizon that follows the ground, because soil does. Thin, with a
+    // ragged base so the truncated bedrock reads immediately underneath.
+    const soilTh = (x) => 9 + 19 * nz.fbm(x / 110, 3, 210) + 32 * Math.pow(nz(x / 47, 260), 4);
+    ctx.beginPath();
+    ctx.moveTo(-8, h - hAt(0) - 4);
+    for (let x = 0; x <= w; x += 4) ctx.lineTo(x, h - hAt(x) - 4);
+    for (let x = w; x >= 0; x -= 4) ctx.lineTo(x, h - hAt(x) + soilTh(x));
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(150,110,70,0.9)';
+    ctx.fill();
+    // Break the mantle's lower contact with overlapping irregular blobs, so
+    // soil tongues down into the rock and rock pokes up into the soil.
+    for (let i = 0; i < 520; i++) {
+      const x = rng() * w;
+      const y = h - hAt(x) + soilTh(x) + (rng() - 0.5) * 14;
+      const r = 2.4 + rng() * 8;
+      ctx.fillStyle = rng() < 0.5 ? 'rgba(152,112,72,0.7)' : 'rgba(96,66,42,0.34)';
+      ctx.beginPath();
+      ctx.ellipse(x, y, r * (0.8 + rng() * 1.0), r * (0.36 + rng() * 0.5), (rng() - 0.5) * 1.2, 0, TAU);
+      ctx.fill();
+    }
+    // Root traces creeping out of the mantle into the rock beneath.
+    ctx.lineCap = 'round';
+    for (let i = 0; i < 90; i++) {
+      const x = rng() * w;
+      const y0 = h - hAt(x) + soilTh(x) * 0.7;
+      const l = 5 + rng() * 13;
+      ctx.strokeStyle = `rgba(74,52,32,${(0.22 + rng() * 0.22).toFixed(2)})`;
+      ctx.lineWidth = 0.7 + rng() * 0.7;
+      ctx.beginPath();
+      ctx.moveTo(x, y0);
+      ctx.quadraticCurveTo(x + (rng() - 0.5) * 10, y0 + l * 0.6, x + (rng() - 0.5) * 14, y0 + l);
+      ctx.stroke();
+    }
+    // Compacted crust directly under the sod (thin, wobbly).
     const cph = rng() * 9;
     ctx.beginPath();
-    ctx.moveTo(0, h - hAt(0) + 10);
-    for (let x = 0; x <= w; x += 6) {
-      ctx.lineTo(x, h - hAt(x) + 10 + 2.5 * Math.sin(x * 0.031 + cph));
-    }
+    ctx.moveTo(0, h - hAt(0) + 8);
+    for (let x = 0; x <= w; x += 6) ctx.lineTo(x, h - hAt(x) + 8 + 2.5 * Math.sin(x * 0.031 + cph));
     for (let x = w; x >= 0; x -= 6) {
-      ctx.lineTo(x, h - hAt(x) + 23 + 4 * Math.sin(x * 0.017 + cph * 1.6) + 2 * Math.sin(x * 0.06 + cph));
+      ctx.lineTo(x, h - hAt(x) + 17 + 3.5 * Math.sin(x * 0.017 + cph * 1.6) + 2 * Math.sin(x * 0.06 + cph));
     }
     ctx.closePath();
-    ctx.fillStyle = 'rgba(56,36,21,0.4)';
+    ctx.fillStyle = 'rgba(58,38,22,0.34)';
     ctx.fill();
 
-    // Large low-frequency warm/cool colour pockets (120-300px) so the big
-    // dirt faces read as patched earth instead of one flat gradient.
+    // ---------------- exposed rock faces ----------------
+    this.paintRockFaces(ctx, rng);
+
+    // Large low-frequency colour pockets so the big dirt faces read as patched
+    // earth rather than one flat deck of bands.
     for (let i = 0; i < 13; i++) {
       const x = rng() * w;
       const gy = h - hAt(x);
@@ -442,137 +956,38 @@ export class Terrain {
       const r = 120 + rng() * 180;
       const warm = rng() > 0.45;
       const cg = ctx.createRadialGradient(x, y, 0, x, y, r);
-      cg.addColorStop(0, warm ? 'rgba(206,144,82,0.11)' : 'rgba(62,56,84,0.10)');
+      cg.addColorStop(0, warm ? 'rgba(206,144,82,0.10)' : 'rgba(62,56,84,0.09)');
       cg.addColorStop(1, 'rgba(0,0,0,0)');
       ctx.fillStyle = cg;
       ctx.beginPath();
-      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.arc(x, y, r, 0, TAU);
       ctx.fill();
     }
 
-    // Big soft clumps of lighter/darker earth.
-    for (let i = 0; i < 70; i++) {
-      const x = rng() * w;
-      const gy = h - hAt(x);
-      const y = gy + 20 + rng() * Math.max(1, h - gy - 20);
-      const r = 16 + rng() * 44;
-      const light = rng() > 0.5;
-      const cg = ctx.createRadialGradient(x, y, 0, x, y, r);
-      cg.addColorStop(0, light ? 'rgba(214,180,138,0.10)' : 'rgba(38,22,10,0.12)');
-      cg.addColorStop(1, 'rgba(0,0,0,0)');
-      ctx.fillStyle = cg;
-      ctx.beginPath();
-      ctx.arc(x, y, r, 0, Math.PI * 2);
-      ctx.fill();
-    }
-
-    // Wavy sediment bands. Each band's y is warped by a fraction of the local
-    // surface height so the layers loosely follow the terrain profile instead
-    // of running dead-horizontal under hills and valleys.
-    const baseH = this._baseH || 250;
-    const warp = (x) => (baseH - hAt(x)) * 0.3;
-    const bands = [];
-    const bph = rng() * 9;
-    let by = h - 26 - rng() * 20;
-    for (let i = 0; i < 14 && by > h - 660; i++) {
-      const bh = 7 + rng() * 14;
-      const amp = 4 + rng() * 6;
-      const f = 0.006 + rng() * 0.006;
-      ctx.beginPath();
-      ctx.moveTo(0, by + warp(0) + Math.sin(bph + i) * amp);
-      for (let x = 0; x <= w; x += 24) ctx.lineTo(x, by + warp(x) + Math.sin(x * f + bph + i * 1.7) * amp);
-      for (let x = w; x >= 0; x -= 24) ctx.lineTo(x, by + bh + warp(x) + Math.sin(x * f + bph + i * 1.7 + 0.8) * amp);
-      ctx.closePath();
-      ctx.fillStyle = i % 3 === 2 ? 'rgba(255,222,170,0.08)' : 'rgba(34,20,9,0.14)';
-      ctx.fill();
-      bands.push({ y: by + bh / 2, amp, f, ph: bph + i * 1.7 });
-      by -= bh + 18 + rng() * 36;
-    }
-
-    // Embedded rocks: clustered pockets (2-4 stones each) at varied depths,
-    // scales 0.6-1.6x, rotated, depth-tinted, partly buried — not a uniform
-    // stamp scatter. Most pebbles cluster along the sediment band boundaries
-    // (as if washed into the strata) rather than uniform scatter.
-    const pockets = 9;
-    for (let i = 0; i < pockets; i++) {
-      const px = (i + 0.15 + rng() * 0.7) * (w / pockets);
-      const gy0 = h - hAt(px);
-      const depthT = 0.12 + rng() * 0.8; // 0 = near surface, 1 = deep
-      const py = gy0 + 46 + depthT * Math.max(1, h - gy0 - 90);
-      const count = 1 + ((rng() * 3.2) | 0);
-      const baseR = 9 + rng() * 8;
-      for (let k = 0; k < count; k++) {
-        const rr = baseR * (0.6 + rng());
-        const rx2 = px + (rng() - 0.5) * (34 + count * 14);
-        const ry2 = py + (rng() - 0.5) * 26;
-        const dT = clamp((ry2 - (h - hAt(rx2))) / Math.max(1, h - (h - hAt(rx2))), 0, 1);
-        drawRock(ctx, rx2, ry2, rr, rng, dT);
-      }
-    }
-    // Pebbles: clustered 2-4 per pocket, density decaying with depth (dense
-    // just under the crust, sparse near the bottom), the odd larger stone —
-    // not the old uniform full-body confetti scatter.
-    for (let i = 0; i < 95; i++) {
-      const x = rng() * w;
-      const gy = h - hAt(x);
-      let y;
-      if (bands.length && rng() < 0.4) {
-        const b = bands[(rng() * bands.length) | 0];
-        y = b.y + warp(x) + Math.sin(x * b.f + b.ph) * b.amp + (rng() - 0.5) * 12;
-      } else {
-        y = gy + 30 + Math.pow(rng(), 2.1) * Math.max(1, h - gy - 36);
-      }
-      if (y < gy + 26 || y > h - 6) continue;
-      const cnt = 2 + ((rng() * 3) | 0);
-      for (let k = 0; k < cnt; k++) {
-        const px2 = x + (rng() - 0.5) * 32;
-        const py2 = y + (rng() - 0.5) * 14;
-        if (py2 < h - hAt(px2) + 24 || py2 > h - 4) continue;
-        drawPebble(ctx, px2, py2, 1.5 + rng() * 3.2, rng);
-      }
-      if (rng() < 0.16) {
-        const dT = clamp((y - gy) / Math.max(1, h - gy), 0, 1);
-        drawRock(ctx, x + (rng() - 0.5) * 26, y + rng() * 10, 5 + rng() * 5, rng, dT);
-      }
-    }
-
-    // Hairline cracks near the surface: dark 1px branching strokes wandering
-    // down from just under the crust.
+    // Hairline cracks, concentrated where the ground is steep (stressed rock).
     const crack = (x, y, ang, len, depth2) => {
       let cx2 = x, cy2 = y, a = ang;
-      ctx.strokeStyle = 'rgba(32,18,8,0.4)';
+      ctx.strokeStyle = 'rgba(32,18,8,0.42)';
       ctx.lineWidth = 1;
       ctx.beginPath();
       ctx.moveTo(cx2, cy2);
-      const segs = 2 + ((rng() * 2) | 0);
+      const segs = 2 + ((rng() * 3) | 0);
       for (let s2 = 0; s2 < segs; s2++) {
         a += (rng() - 0.5) * 0.8;
-        const sl = len * (0.2 + rng() * 0.2);
+        const sl = len * (0.2 + rng() * 0.25);
         cx2 += Math.cos(a) * sl;
         cy2 += Math.sin(a) * sl;
         ctx.lineTo(cx2, cy2);
       }
       ctx.stroke();
-      if (depth2 === 0 && rng() < 0.6) {
-        crack(cx2, cy2, a + (rng() < 0.5 ? -0.8 : 0.8), len * 0.45, 1);
-      }
+      if (depth2 === 0 && rng() < 0.6) crack(cx2, cy2, a + (rng() < 0.5 ? -0.8 : 0.8), len * 0.45, 1);
     };
-    for (let i = 0; i < 8; i++) {
+    for (let i = 0; i < 26; i++) {
       const x = 30 + rng() * (w - 60);
+      const steep = clamp(Math.abs(hAt(x + 6) - hAt(x - 6)) / 12, 0, 1.4);
+      if (rng() > 0.2 + steep) continue;
       const gy = h - hAt(x);
-      crack(x, gy + 26 + rng() * 18, Math.PI / 2 + (rng() - 0.5) * 1.1, 16 + rng() * 16, 0);
-    }
-
-    // Fine speckle grain — light speckles halved in the upper half of the soil
-    // so the sunlit topsoil stays clean.
-    for (let i = 0; i < 8000; i++) {
-      const x = rng() * w;
-      const gy = h - hAt(x);
-      const y = gy + rng() * Math.max(1, h - gy);
-      const light = rng() > 0.5;
-      if (light && y < gy + (h - gy) * 0.5 && rng() < 0.5) continue;
-      ctx.fillStyle = light ? 'rgba(255,230,190,0.05)' : 'rgba(25,12,4,0.07)';
-      ctx.fillRect(x, y, 1 + rng() * 2, 1 + rng() * 2);
+      crack(x, gy + 22 + rng() * 60, Math.PI / 2 + (rng() - 0.5) * 1.3, 14 + rng() * 16, 0);
     }
 
     // Island interior: warm top, rocky shaded belly.
@@ -586,8 +1001,8 @@ export class Terrain {
 
       const ug = ctx.createLinearGradient(0, cy + 30, 0, bottom);
       ug.addColorStop(0, 'rgba(86,70,60,0)');
-      ug.addColorStop(0.5, 'rgba(80,64,54,0.45)');
-      ug.addColorStop(1, 'rgba(48,38,32,0.78)');
+      ug.addColorStop(0.5, 'rgba(80,64,54,0.4)');
+      ug.addColorStop(1, 'rgba(48,38,32,0.74)');
       ctx.fillStyle = ug;
       ctx.fillRect(cx - rx - 60, cy + 20, rx * 2 + 120, bottom - cy + 60);
 
@@ -600,6 +1015,213 @@ export class Terrain {
         ctx.fillStyle = rng() > 0.5 ? 'rgba(255,230,190,0.05)' : 'rgba(25,12,4,0.07)';
         ctx.fillRect(x, y, 1 + rng() * 2, 1 + rng() * 2);
       }
+    }
+  }
+
+  // Per-bed texture, drawn clipped to that bed. Every density here is a
+  // property of the BED and is further modulated by a low-frequency field in
+  // x, so grit collects in patches instead of dusting the whole map evenly.
+  paintBedDetail(ctx, rng, li, R, bnd, dt) {
+    const { w, h } = this;
+    const nz = this._nz;
+    const hAt = this.groundHeightFn;
+    const TAU = Math.PI * 2;
+    const thAvg = Math.max(1, bnd(li + 1, w * 0.5) - bnd(li, w * 0.5));
+    // Sample a point inside the bed at a random x; null if pinched out or
+    // above ground there.
+    const pick = () => {
+      const x = rng() * w;
+      const y0 = bnd(li, x), y1 = bnd(li + 1, x);
+      if (y1 - y0 < 2.5) return null;
+      const y = y0 + rng() * (y1 - y0);
+      if (y < h - hAt(x) + 10 || y > h + 4) return null;
+      return [x, y, (y - y0) / (y1 - y0)];
+    };
+    // Low-frequency regional density: some stretches are clean, some gritty.
+    const reg = (x) => nz(x / 300, 111 + li * 5);
+
+    // Bedding laminations: thin lines PARALLEL TO THE BED, not to the ground.
+    const nlam = Math.round(R.lam * thAvg / 7);
+    for (let k = 0; k < nlam; k++) {
+      const t = (k + 0.5 + (rng() - 0.5) * 0.6) / Math.max(1, nlam);
+      const jit = (rng() - 0.5) * 3;
+      ctx.beginPath();
+      const xs = rng() * w * 0.5, xe = xs + w * (0.25 + rng() * 0.75);
+      for (let x = xs; x <= xe; x += 12) {
+        const y = bnd(li, x) + (bnd(li + 1, x) - bnd(li, x)) * t + jit + (nz(x / 34, 300 + k) - 0.5) * 2;
+        if (x === xs) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.strokeStyle = rng() < 0.35 ? 'rgba(255,232,192,0.09)' : 'rgba(26,15,6,0.16)';
+      ctx.lineWidth = 0.8 + rng() * 0.8;
+      ctx.stroke();
+    }
+
+    // Mottling: broad soft patches of lighter / darker material so a thick bed
+    // is never a flat slab of one colour.
+    const nmot = Math.round(thAvg * w / 5000) + 3;
+    for (let k = 0; k < nmot; k++) {
+      const p = pick();
+      if (!p) continue;
+      const r = 34 + rng() * 130;
+      const cg = ctx.createRadialGradient(p[0], p[1], 0, p[0], p[1], r);
+      const light = rng() > 0.45;
+      cg.addColorStop(0, light ? 'rgba(255,226,180,0.13)' : 'rgba(30,17,7,0.14)');
+      cg.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = cg;
+      ctx.beginPath();
+      ctx.ellipse(p[0], p[1], r, r * (0.32 + rng() * 0.3), 0, 0, TAU);
+      ctx.fill();
+    }
+
+    // Cross-bedding: shallow inclined foresets, the signature of sand.
+    if (R.spec > 0.6 && thAvg > 22) {
+      const sets = 2 + ((rng() * 4) | 0);
+      for (let k = 0; k < sets; k++) {
+        const p = pick();
+        if (!p) continue;
+        const wdt = 40 + rng() * 130;
+        const dip = (rng() < 0.5 ? -1 : 1) * (0.16 + rng() * 0.3);
+        for (let q = 0; q < 7; q++) {
+          const off = (q - 3) * (wdt / 9);
+          ctx.strokeStyle = q % 2 ? 'rgba(255,232,192,0.10)' : 'rgba(30,17,7,0.13)';
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(p[0] + off - wdt * 0.4, p[1] - wdt * 0.4 * dip);
+          ctx.quadraticCurveTo(p[0] + off, p[1] + wdt * 0.06,
+            p[0] + off + wdt * 0.4, p[1] + wdt * 0.4 * dip);
+          ctx.stroke();
+        }
+      }
+    }
+
+    // Fine speckle grain.
+    const nspec = Math.round(thAvg * w / 145 * R.spec);
+    for (let k = 0; k < nspec; k++) {
+      const p = pick();
+      if (!p) continue;
+      if (rng() > 0.3 + reg(p[0]) * 1.2) continue;
+      const light = rng() > 0.5;
+      ctx.fillStyle = light ? 'rgba(255,230,190,0.06)' : 'rgba(25,12,4,0.08)';
+      ctx.fillRect(p[0], p[1], 1 + rng() * 2, 1 + rng() * 2);
+    }
+
+    // Gravel: clustered pebble beds, only in beds whose recipe calls for it.
+    if (R.grit > 0.02) {
+      const npock = Math.round(thAvg * w / 2600 * R.grit) + 1;
+      for (let k = 0; k < npock; k++) {
+        const p = pick();
+        if (!p) continue;
+        if (rng() > 0.2 + reg(p[0]) * 1.5) continue;
+        const cnt = 3 + ((rng() * 8 * R.grit) | 0);
+        for (let q = 0; q < cnt; q++) {
+          drawPebble(ctx, p[0] + (rng() - 0.5) * 46, p[1] + (rng() - 0.5) * 20, 1.5 + rng() * 3.4, rng);
+        }
+        if (rng() < 0.35) drawRock(ctx, p[0] + (rng() - 0.5) * 30, p[1], 5 + rng() * 8, rng, dt);
+      }
+    }
+
+    // Cobbles / boulders embedded in coarse beds.
+    if (R.rough > 0.5) {
+      const nrock = 1 + ((rng() * 4 * R.rough) | 0);
+      for (let k = 0; k < nrock; k++) {
+        const p = pick();
+        if (!p) continue;
+        drawRock(ctx, p[0], p[1], 8 + rng() * 12, rng, dt);
+      }
+    }
+
+    // Nodules / concretions in the muddier beds.
+    if (R.grit < 0.1 && R.lam > 0.4) {
+      for (let k = 0; k < 5; k++) {
+        const p = pick();
+        if (!p) continue;
+        ctx.fillStyle = 'rgba(196,168,124,0.16)';
+        ctx.beginPath();
+        ctx.ellipse(p[0], p[1], 5 + rng() * 12, 2.5 + rng() * 4, (rng() - 0.5) * 0.5, 0, TAU);
+        ctx.fill();
+      }
+    }
+  }
+
+  // Weathered rind on every steep face. The band is offset along the surface
+  // NORMAL, not straight down: on a vertical cliff that makes a strip running
+  // horizontally INTO the rock, which is where the exposed face actually is.
+  // (Offsetting downward instead smears a translucent curtain over the whole
+  // drop and reads as a paint drip.) Inside the band: a graded rim shadow, a
+  // lit top edge, joints running with the face, and spalled blocks.
+  paintRockFaces(ctx, rng) {
+    const { w, h } = this;
+    const H = this._H;
+    const nz = this._nz;
+    const slope = (x) => (H[Math.min(w, x + 2)] - H[Math.max(0, x - 2)]) / 4;
+
+    let x = 2;
+    while (x < w - 2) {
+      if (Math.abs(slope(x)) < 0.7) { x++; continue; }
+      let x2 = x;
+      while (x2 < w - 2 && Math.abs(slope(x2)) >= 0.45) x2++;
+      if (x2 - x >= 3) {
+        const xa = Math.max(0, x - 3), xb = Math.min(w, x2 + 3);
+        const dep = 16 + rng() * 26;
+        // Inward normal at column i (canvas space, y down).
+        const inw = (i) => {
+          const m = -(H[Math.min(w, i + 2)] - H[Math.max(0, i - 2)]) / 4;
+          const L = Math.hypot(1, m);
+          return [-m / L, 1 / L];
+        };
+        const pathOf = (scale) => {
+          const p = new Path2D();
+          p.moveTo(xa, h - H[xa]);
+          for (let i = xa; i <= xb; i++) p.lineTo(i, h - H[i]);
+          for (let i = xb; i >= xa; i--) {
+            const d = dep * scale * (0.5 + 0.5 * nz(i / 26, 470));
+            const [ix, iy] = inw(i);
+            p.lineTo(i + ix * d, h - H[i] + iy * d);
+          }
+          p.closePath();
+          return p;
+        };
+        ctx.save();
+        ctx.clip(pathOf(1));
+        // Weathered, slightly cooler and lighter than the buried rock.
+        ctx.fillStyle = 'rgba(150,136,118,0.16)';
+        ctx.fillRect(xa - dep - 4, 0, xb - xa + dep * 2 + 8, h);
+        // Joints running WITH the face, plus cross joints splitting it.
+        const nJ = Math.round((xb - xa) * 0.35) + 6;
+        for (let k = 0; k < nJ; k++) {
+          const px = xa + rng() * (xb - xa);
+          const [ix, iy] = inw(px | 0);
+          const d = rng() * dep;
+          const bx = px + ix * d, by = h - H[px | 0] + iy * d;
+          const along = rng() < 0.55;
+          const l = along ? 10 + rng() * 40 : 4 + rng() * 14;
+          const dx = along ? -iy : ix, dy = along ? ix : iy;
+          ctx.strokeStyle = rng() < 0.35 ? 'rgba(240,232,218,0.16)' : 'rgba(24,15,8,0.36)';
+          ctx.lineWidth = 0.9 + rng() * 0.8;
+          ctx.beginPath();
+          ctx.moveTo(bx, by);
+          ctx.lineTo(bx + dx * l + (rng() - 0.5) * 5, by + dy * l + (rng() - 0.5) * 5);
+          ctx.stroke();
+        }
+        ctx.restore();
+        // Rim shadow immediately inside the edge (a thinner second band).
+        ctx.save();
+        ctx.clip(pathOf(0.34));
+        ctx.fillStyle = 'rgba(28,17,8,0.22)';
+        ctx.fillRect(xa - dep - 4, 0, xb - xa + dep * 2 + 8, h);
+        ctx.restore();
+        // Spalled blocks clinging to the face.
+        ctx.save();
+        ctx.clip(pathOf(1.15));
+        for (let k = 0; k < 6; k++) {
+          const px = xa + rng() * (xb - xa);
+          const [ix, iy] = inw(px | 0);
+          const d = rng() * dep;
+          drawRock(ctx, px + ix * d, h - H[px | 0] + iy * d, 4 + rng() * 8, rng, 0.3);
+        }
+        ctx.restore();
+      }
+      x = x2 + 1;
     }
   }
 
@@ -681,9 +1303,65 @@ export class Terrain {
     const p = this._np;
     return clamp(0.5 + 0.32 * Math.sin(x * 0.023 + p[3]) + 0.2 * Math.sin(x * 0.087 + p[1] * 1.7), 0, 1);
   }
+  // Mid-frequency band (wavelengths ~90 and ~230px) used to swell and starve
+  // the sod thickness along the contour.
+  noise3(x) {
+    const p = this._np;
+    return clamp(0.5 + 0.32 * Math.sin(x * 0.027 + p[1] * 2.1)
+      + 0.21 * Math.sin(x * 0.069 + p[2] * 1.3)
+      + 0.12 * Math.sin(x * 0.013 + p[3] * 0.7), 0, 1);
+  }
   hash01(x) {
     const s = Math.sin(x * 127.1 + this._hs) * 43758.5453;
     return s - Math.floor(s);
+  }
+
+  // Grass/dirt contact, painted as ~1 blob per 8px of surface rather than a
+  // stroked offset line: soil crumbs bleed up into the sod, root hairs and
+  // dark clods hang down into it, and bare scuffs open right through.
+  paintSeam(x0, x1) {
+    const { ctx } = this;
+    const top = this._sodTop, dep = this._sodD, slp = this._sodSlope;
+    if (!top) return;
+    const TAU = Math.PI * 2;
+    const CELL = 8;
+    ctx.save();
+    for (let k = Math.floor(x0 / CELL) - 1; k <= Math.ceil(x1 / CELL) + 1; k++) {
+      const h1 = this.hash01(k * 7.7 + 3);
+      const h2 = this.hash01(k * 13.1 + 9);
+      const h3 = this.hash01(k * 4.3 + 21);
+      const cx = k * CELL + h1 * CELL;
+      const xi = clamp(Math.round(cx), 0, this.w - 1);
+      const d = dep[xi];
+      if (!(d > 3)) continue;
+      const t = top[xi];
+      const sc = this.scorchAt(xi, t);
+      const steep = clamp(Math.abs(slp[xi]) / 1.15, 0, 1);
+      const by = t + d + (h2 - 0.5) * 7;
+      const r = 2.2 + h3 * 6.5;
+      if (h3 < 0.42) {
+        // Soil crumb pushing UP into the green.
+        ctx.fillStyle = sc > 0.4 ? 'rgba(48,36,26,0.55)' : `rgba(${118 + h1 * 40 | 0},${84 + h2 * 30 | 0},${52 + h3 * 26 | 0},0.62)`;
+      } else if (h3 < 0.78) {
+        // Shaded sod clod hanging DOWN into the soil.
+        ctx.fillStyle = css(mix(mix(GRASS_DEEP, [26, 74, 30], h1), CHAR_DEEP, sc), 0.72);
+      } else {
+        ctx.fillStyle = 'rgba(26,16,9,0.34)';
+      }
+      ctx.beginPath();
+      ctx.ellipse(cx, by, r * (0.75 + h1 * 1.05), r * (0.35 + h2 * 0.6), (h1 - 0.5) * 1.4, 0, TAU);
+      ctx.fill();
+      // Root hairs trailing from the sod into the soil (skip on rock).
+      if (h2 > 0.72 && steep < 0.6 && sc < 0.4) {
+        ctx.strokeStyle = 'rgba(74,52,32,0.5)';
+        ctx.lineWidth = 0.9;
+        ctx.beginPath();
+        ctx.moveTo(cx, t + d * 0.7);
+        ctx.quadraticCurveTo(cx + (h1 - 0.5) * 7, by + 3, cx + (h3 - 0.5) * 10, by + 5 + h1 * 7);
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
   }
 
   // Effective scorch for a surface at (column x, canvas y `top`): the stored
@@ -705,13 +1383,19 @@ export class Terrain {
   paintSurfaceDetail(rx = 0, rw = this.w) {
     const { ctx, mask, w, h } = this;
     const PAD = 18;
+    const SL = 8;   // half-span used for the slope estimate
     const x0 = clamp(Math.floor(rx) - PAD, 0, w - 1);
     const x1 = clamp(Math.ceil(rx + rw) + PAD, 0, w - 1);
-    const n = x1 - x0 + 1;
+    // Runs are collected over a WIDER window than the repaint range so the
+    // slope at every painted column is computed from the same neighborhood
+    // no matter how big the dirty range was — repaints stay seam-free.
+    const xa = clamp(x0 - SL, 0, w - 1);
+    const xb = clamp(x1 + SL, 0, w - 1);
+    const n = xb - xa + 1;
 
     // Solid runs per column: arrays of [top, bottom).
     const runs = new Array(n);
-    for (let x = x0; x <= x1; x++) {
+    for (let x = xa; x <= xb; x++) {
       const list = [];
       let prev = 0, start = 0;
       for (let y = 0; y < h; y++) {
@@ -721,45 +1405,69 @@ export class Terrain {
         prev = s;
       }
       if (prev) list.push([start, h]);
-      runs[x - x0] = list;
+      runs[x - xa] = list;
     }
 
+    // Surface gradient (canvas dy/dx) for the run whose top is `top`, matched
+    // against the nearest run in the columns SL to either side.
+    const nearTop = (col, ref) => {
+      const list = runs[clamp(col, xa, xb) - xa];
+      if (!list || !list.length) return null;
+      let best = null, bd = 96;
+      for (const r of list) {
+        const d = Math.abs(r[0] - ref);
+        if (d < bd) { bd = d; best = r[0]; }
+      }
+      return best;
+    };
+    const slopeAt = (col, top) => {
+      const l = nearTop(col - SL, top), r = nearTop(col + SL, top);
+      if (l != null && r != null) return (r - l) / (2 * SL);
+      // One side fell away entirely: that IS a cliff edge, so report steep.
+      if (l != null) { const s = (top - l) / SL; return Math.abs(s) < 1.3 ? 1.3 : s; }
+      if (r != null) { const s = (r - top) / SL; return Math.abs(s) < 1.3 ? 1.3 : s; }
+      return 0;
+    };
+
     // Clear the cosmetic strip above every run top (stale tufts / outline).
-    for (let i = 0; i < n; i++) {
-      const list = runs[i];
+    for (let x = x0; x <= x1; x++) {
+      const list = runs[x - xa];
       for (let r = 0; r < list.length; r++) {
         const top = list[r][0];
         const lim = r > 0 ? list[r - 1][1] : 0;
-        const cs = Math.max(lim, top - 14);
-        if (cs < top) ctx.clearRect(x0 + i, cs, 1, top - cs);
+        const cs = Math.max(lim, top - 20);
+        if (cs < top) ctx.clearRect(x, cs, 1, top - cs);
       }
     }
 
     // Sod columns.
-    for (let i = 0; i < n; i++) {
-      for (const [top, bottom] of runs[i]) {
-        this.paintGrassColumn(x0 + i, top, bottom, this.scorchAt(x0 + i, top));
+    for (let x = x0; x <= x1; x++) {
+      const list = runs[x - xa];
+      for (let r = 0; r < list.length; r++) {
+        const [top, bottom] = list[r];
+        this.paintGrassColumn(x, top, bottom, this.scorchAt(x, top), slopeAt(x, top), r === 0);
       }
     }
 
     // Grass fringe draping over cliff edges (topmost surface only).
-    for (let i = 0; i < n - 1; i++) {
-      const ra = runs[i], rb = runs[i + 1];
+    for (let x = x0; x < x1; x++) {
+      const ra = runs[x - xa], rb = runs[x + 1 - xa];
       if (!ra.length || !rb.length) continue;
       const a = ra[0][0], b = rb[0][0];
       const d = b - a;
-      if (d > 6) this.paintFringe(x0 + i + 1, a, Math.min(12, d), this.scorchAt(x0 + i, a));
-      else if (d < -6) this.paintFringe(x0 + i, b, Math.min(12, -d), this.scorchAt(x0 + i + 1, b));
+      if (d > 6) this.paintFringe(x + 1, a, Math.min(12, d), this.scorchAt(x, a));
+      else if (d < -6) this.paintFringe(x, b, Math.min(12, -d), this.scorchAt(x + 1, b));
     }
 
     // Silhouette strokes + drawn tuft shapes along each connected top edge.
     // Clip to the repaint range so geometry can extend into (identical)
     // neighbor pixels without double-compositing their anti-aliased edges.
-    const chains = this.buildTopChains(runs, x0);
+    const chains = this.buildTopChains(runs, xa);
     ctx.save();
     ctx.beginPath();
     ctx.rect(x0, 0, x1 - x0 + 1, h);
     ctx.clip();
+    this.paintSeam(x0, x1);
     for (const chn of chains) this.paintChain(chn);
     ctx.restore();
 
@@ -838,51 +1546,73 @@ export class Terrain {
     const jit = (x) => 1.1 * Math.sin(x * 0.147 + p[0] * 3.1)
                      + 0.9 * Math.sin(x * 0.061 + p[1] * 2.3)
                      + 0.5 * Math.sin(x * 0.023 + p[2]);
+    // Segments are batched by (scorch bucket, sod-present) so a single stroke
+    // can switch from green sod edge to bare rock edge where the sod dies out.
+    const sodD = this._sodD;
+    const bucketAt = (i) => {
+      const x = clamp(chn.x0 + i, 0, this.w - 1);
+      return Math.min(4, (sc[i] * 5) | 0) + (sodD[x] > 3.2 ? 0 : 8);
+    };
     const strokeRuns = (dy, width, jAmt, colFn) => {
       let i = 0;
       while (i < m - 1) {
-        const bucket = Math.min(4, (sc[i] * 5) | 0);
+        const bucket = bucketAt(i);
         let j = i + 1;
-        while (j < m - 1 && Math.min(4, (sc[j] * 5) | 0) === bucket) j++;
+        while (j < m - 1 && bucketAt(j) === bucket) j++;
         ctx.beginPath();
         ctx.moveTo(chn.x0 + i, ys[i] + dy + jit(chn.x0 + i) * jAmt);
         for (let k = i + 1; k <= j; k++) {
           ctx.lineTo(chn.x0 + k, ys[k] + dy + jit(chn.x0 + k) * jAmt);
         }
-        ctx.strokeStyle = colFn(bucket / 4);
+        ctx.strokeStyle = colFn((bucket & 7) / 4, bucket >= 8);
         ctx.lineWidth = width;
         ctx.stroke();
         i = j;
       }
     };
     // Deep-green silhouette under-edge, then the dark ink line above it.
-    // Different jitter amounts make the gap between them breathe too.
-    strokeRuns(0.6, 3.4, 1.0, (s) => css(mix([31, 107, 42], [44, 30, 18], s)));
-    strokeRuns(-1.9, 2.4, 0.55, (s) => css(mix([26, 34, 16], [10, 6, 4], s), 0.95));
+    // Different jitter amounts make the gap between them breathe too. Where
+    // the sod has thinned to nothing (cliffs) the under-edge switches to bare
+    // rock, so no green ribbon runs down a vertical face.
+    strokeRuns(0.6, 3.4, 1.0, (s, b) => (b
+      ? 'rgba(74,62,48,0.85)'
+      : css(mix([31, 107, 42], [44, 30, 18], s))));
+    strokeRuns(-1.9, 2.4, 0.55, (s, b) => css(mix([26, 34, 16], [10, 6, 4], s), b ? 0.8 : 0.95));
 
-    // Scattered blade clusters: coarse 16px cells each holding 0-2 clumps at
-    // hashed offsets, so effective spacing wanders 8-30px with bare skips —
-    // no fixed pitch for the eye to lock onto. Each clump is 2-4 short
-    // tapered blades in two green tones with +/-35% scale variation.
-    // Burnt stubs replace clumps where scorched.
+    // Tufts. Placement is Poisson-ish with a clustering bias: 30px cells, most
+    // of them empty, the occupied ones carrying a burst of 1-3 tufts. A tuft
+    // is 3-7 blades of randomized height, width, lean and silhouette, all
+    // built on the SURFACE NORMAL rather than world-up, so grass on a slope
+    // lies with the slope. Tufts thin out and vanish as the sod thins.
     if (m >= 6) {
-      const CELL = 16;
+      const CELL = 30;
       const xa = chn.x0 + 1, xb = chn.x0 + m - 2;
+      const TAU = Math.PI * 2;
       for (let k = Math.floor(xa / CELL); k <= Math.ceil(xb / CELL); k++) {
         const hSkip = this.hash01(k * 17.3 + 5);
-        if (hSkip < 0.18) continue; // bare stretch
-        const nClump = hSkip > 0.78 ? 2 : 1;
+        if (hSkip < 0.34) continue;                       // bare stretch (30-120px gaps)
+        const nClump = hSkip > 0.86 ? 3 : hSkip > 0.62 ? 2 : 1;
         for (let c = 0; c < nClump; c++) {
           const h1 = this.hash01(k * 3.7 + c * 41.7);
           const h2 = this.hash01(k * 9.1 + c * 13.9 + 4);
           const h3 = this.hash01(k * 5.3 + c * 7.7 + 2);
-          const cx = k * CELL + h1 * CELL;
+          const h4 = this.hash01(k * 11.9 + c * 29.3 + 6);
+          // Cluster the members of a burst near each other rather than
+          // spreading them evenly across the cell.
+          const cx = k * CELL + (h1 * 0.55 + c * 0.13 + h4 * 0.12) * CELL;
           if (cx < xa || cx > xb) continue;
           const fi = cx - chn.x0;
           const i0 = Math.floor(fi), ft = fi - i0;
           const y = ys[i0] * (1 - ft) + ys[Math.min(m - 1, i0 + 1)] * ft;
           const slope = (ys[Math.min(m - 1, i0 + 3)] - ys[Math.max(0, i0 - 3)]) / 6;
           const s = this.scorchAt(Math.round(cx), Math.round(y));
+          // Sod thickness gates the tuft: bare rock grows nothing, thin sod
+          // grows short sparse stubble, deep sod grows tall tufts.
+          const sod = this._sodD[clamp(Math.round(cx), 0, this.w - 1)];
+          if (sod < 3.6) continue;
+          const lush = clamp((sod - 3.5) / 12, 0, 1);
+          if (h4 > 0.25 + lush * 0.9) continue;
+
           if (s >= 0.55) {
             if (h2 > 0.45) { // sparse burnt sprigs on charred ground
               ctx.fillStyle = 'rgba(26,18,12,0.9)';
@@ -895,29 +1625,116 @@ export class Terrain {
             }
             continue;
           }
-          const scale = 0.65 + h2 * 0.75;
-          const blades = 2 + ((h3 * 2.7) | 0);
-          const lean0 = clamp(-slope * 2.5, -2.8, 2.8) + (h2 - 0.5) * 2.4;
+
+          // Surface frame: n = up-normal, t = tangent.
+          const inv = 1 / Math.hypot(1, slope);
+          const nX = slope * inv, nY = -inv;
+          const tX = inv, tY = slope * inv;
+          const scale = (0.72 + h2 * 1.0) * (0.5 + 0.55 * lush);
+          const blades = 3 + ((h3 * 4.4) | 0);
+          const style = (h1 * 4) | 0;                 // 4 blade silhouettes
           const toneA = h1 > 0.5 ? [58, 182, 78] : [104, 212, 66];
           const toneB = h1 > 0.5 ? [40, 134, 54] : [66, 170, 58];
-          for (let b = 0; b < blades; b++) {
-            const hb = this.hash01(k * 23.3 + c * 3.1 + b * 11.1);
-            const bx = cx + (b - (blades - 1) / 2) * (1.5 + hb * 1.7);
-            const th = (3 + hb * 5) * scale * (1 - s * 0.5);
-            const wk = (1.1 + hb * 0.9) * scale;
-            const lean = lean0 + (hb - 0.5) * 2.8;
-            ctx.fillStyle = css(mix(b % 2 ? toneB : toneA, [58, 42, 26], s), 0.96);
+
+          const blade = (bx, by, len, wk, lean, bend, col) => {
+            const ca = Math.cos(lean), sa = Math.sin(lean);
+            const uX = nX * ca - nY * sa, uY = nX * sa + nY * ca;   // blade axis
+            const pX = -uY, pY = uX;                                 // across it
+            const tipX = bx + uX * len, tipY = by + uY * len;
+            const mX = bx + uX * len * 0.55 + pX * bend * len;
+            const mY = by + uY * len * 0.55 + pY * bend * len;
+            ctx.fillStyle = col;
             ctx.beginPath();
-            ctx.moveTo(bx - wk, y + 1.5);
-            ctx.quadraticCurveTo(bx - wk * 0.3 + lean * 0.4, y - th * 0.6, bx + lean, y - th);
-            ctx.quadraticCurveTo(bx + wk * 0.4 + lean * 0.3, y - th * 0.4, bx + wk, y + 1.5);
+            ctx.moveTo(bx - pX * wk, by - pY * wk);
+            ctx.quadraticCurveTo(mX - pX * wk * 0.4, mY - pY * wk * 0.4, tipX, tipY);
+            ctx.quadraticCurveTo(mX + pX * wk * 0.5, mY + pY * wk * 0.5, bx + pX * wk, by + pY * wk);
             ctx.closePath();
             ctx.fill();
+          };
+
+          for (let b = 0; b < blades; b++) {
+            const hb = this.hash01(k * 23.3 + c * 3.1 + b * 11.1);
+            const hc = this.hash01(k * 31.7 + c * 5.9 + b * 3.3 + 8);
+            // Sit the blade base ON the surface line, spread along the tangent.
+            const off = (b - (blades - 1) / 2) * (1.3 + hb * 2.0);
+            const bx = cx + tX * off;
+            const by = y + 1.2 + tY * off;
+            // +/-22deg lean, plus per-style shaping.
+            let len = (3.2 + hb * 6.2) * scale;
+            let wk = (1.0 + hc * 0.9) * scale;
+            let bend = (hb - 0.5) * 0.28;
+            const lean = (hc - 0.5) * 0.78 + (h2 - 0.5) * 0.3;
+            if (style === 1) { len *= 1.35; wk *= 0.72; bend *= 1.9; }        // long arcing
+            else if (style === 2) { len *= 0.72; wk *= 1.5; bend *= 0.5; }    // broad leaf
+            else if (style === 3) { len *= 1.1; wk *= 0.85; bend = (b % 2 ? 1 : -1) * 0.34; }
+            blade(bx, by, len, wk, lean, bend, css(mix(b % 2 ? toneB : toneA, [58, 42, 26], s), 0.96));
           }
-          // Rare flower head on tall clumps.
-          if (h3 > 0.93 && s < 0.25 && scale > 0.9) {
-            ctx.fillStyle = h3 > 0.97 ? 'rgba(255,248,236,0.95)' : 'rgba(255,214,92,0.95)';
-            ctx.fillRect(cx + lean0 - 1, y - 8 * scale - 2.4, 2, 2);
+
+          // Flowers: real clumps of 3-5 heads, three colour variants and two
+          // silhouettes, on visible stalks. Rare enough to stay special, dense
+          // enough where they appear to read as flowers and not stray pixels.
+          if (h3 > 0.86 && lush > 0.55) {
+            const pal = h1 < 0.34 ? [255, 236, 120] : h1 < 0.67 ? [255, 246, 240] : [222, 150, 236];
+            const heads = 3 + ((h2 * 3) | 0);
+            for (let f = 0; f < heads; f++) {
+              const hf = this.hash01(k * 43.1 + c * 17.7 + f * 6.1);
+              const hg = this.hash01(k * 19.3 + c * 23.1 + f * 9.7 + 3);
+              const off = (hf - 0.5) * 16;
+              const bx = cx + tX * off, by = y + 1 + tY * off;
+              const len = (7 + hg * 7) * (0.7 + lush * 0.5);
+              const ca = Math.cos((hg - 0.5) * 0.6), sa = Math.sin((hg - 0.5) * 0.6);
+              const uX = nX * ca - nY * sa, uY = nX * sa + nY * ca;
+              ctx.strokeStyle = 'rgba(54,132,52,0.92)';
+              ctx.lineWidth = 1;
+              ctx.beginPath();
+              ctx.moveTo(bx, by);
+              ctx.quadraticCurveTo(bx + uX * len * 0.6 + uY * 1.5, by + uY * len * 0.6 - uX * 1.5,
+                bx + uX * len, by + uY * len);
+              ctx.stroke();
+              const hx = bx + uX * len, hy = by + uY * len;
+              const r = 1.5 + hf * 1.5;
+              if (hf < 0.5) {           // daisy: five petals + core
+                ctx.fillStyle = css(pal, 0.96);
+                for (let q = 0; q < 5; q++) {
+                  const a = (q / 5) * TAU + hg * 3;
+                  ctx.beginPath();
+                  ctx.ellipse(hx + Math.cos(a) * r * 0.9, hy + Math.sin(a) * r * 0.9, r * 0.75, r * 0.55, a, 0, TAU);
+                  ctx.fill();
+                }
+                ctx.fillStyle = 'rgba(250,196,60,0.95)';
+                ctx.beginPath();
+                ctx.arc(hx, hy, r * 0.6, 0, TAU);
+                ctx.fill();
+              } else {                  // bell / berry cluster
+                ctx.fillStyle = css(pal, 0.95);
+                ctx.beginPath();
+                ctx.ellipse(hx, hy, r * 1.2, r * 1.5, (hg - 0.5), 0, TAU);
+                ctx.fill();
+                ctx.fillStyle = 'rgba(255,255,255,0.5)';
+                ctx.beginPath();
+                ctx.arc(hx - r * 0.35, hy - r * 0.5, r * 0.4, 0, TAU);
+                ctx.fill();
+              }
+            }
+          } else if (h3 < 0.06 && lush > 0.6) {
+            // Occasional low shrub: a lobed dark-green mass with a lit crown.
+            const r = 5 + h2 * 7;
+            const bx = cx, by = y + 1;
+            ctx.fillStyle = css(mix(GRASS_DEEP, [22, 76, 32], 0.5), 0.95);
+            ctx.beginPath();
+            for (let q = 0; q <= 12; q++) {
+              const a = Math.PI + (q / 12) * Math.PI;
+              const rr = r * (0.78 + 0.34 * this.hash01(k * 3.1 + q * 7.3));
+              const px = bx + Math.cos(a) * rr * 1.25;
+              const py = by + Math.sin(a) * rr;
+              if (q === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+            }
+            ctx.closePath();
+            ctx.fill();
+            ctx.fillStyle = css(mix(GRASS_MID, GRASS_HI, 0.35), 0.85);
+            ctx.beginPath();
+            ctx.ellipse(bx - r * 0.35, by - r * 0.62, r * 0.62, r * 0.34, -0.3, 0, TAU);
+            ctx.fill();
           }
         }
       }
@@ -925,20 +1742,46 @@ export class Terrain {
     ctx.restore();
   }
 
-  paintGrassColumn(x, top, bottom, scorch) {
+  // Sod thickness at column x: thick on flats, thinning to nothing on cliffs
+  // (grass cannot hold on rock), further modulated 0.55x-1.6x by noise so the
+  // green band is never a constant-width offset ribbon.
+  grassDepth(x, slope) {
+    const st = clamp(Math.abs(slope || 0) / 1.15, 0, 1);
+    const thin = 1 - 0.9 * st * st;
+    const vary = 0.5 + 1.15 * this.noise3(x);
+    return (11 + 10 * this.noise1(x)) * thin * vary;
+  }
+
+  paintGrassColumn(x, top, bottom, scorch, slope = 0, isTop = true) {
     const { ctx, h } = this;
     const s = clamp(scorch || 0, 0, 1);
     const run = bottom - top;
     const lip = mix(LIP, LIP_CHAR, s);
+    if (isTop && this._sodTop) { this._sodTop[x] = top; this._sodSlope[x] = slope; }
     if (run < 4) {
       ctx.fillStyle = css(mix(GRASS_DEEP, CHAR_DEEP, s));
       ctx.fillRect(x, top, 1, run);
+      if (isTop && this._sodD) this._sodD[x] = 0;
       return;
     }
     const n1 = this.noise1(x);
     const n2 = this.noise2(x);
     const j = n2 - 0.5;
-    const d = Math.min(run - 1, Math.round(11 + 9 * n1));
+    const d0 = this.grassDepth(x, slope);
+    if (isTop && this._sodD) this._sodD[x] = d0;
+    // Bare rock: too steep (or too scoured) for sod. Just a dark weathered lip
+    // so the silhouette still reads, and the strata below stay exposed.
+    if (d0 < 3.2) {
+      const bh = Math.min(run, 3);
+      ctx.fillStyle = `rgba(58,44,30,${(0.5 + 0.3 * n2).toFixed(2)})`;
+      ctx.fillRect(x, top, 1, bh);
+      if (bottom < h) {
+        ctx.fillStyle = css(lip, 0.85);
+        ctx.fillRect(x, bottom, 1, 2);
+      }
+      return;
+    }
+    const d = Math.min(run - 1, Math.max(2, Math.round(d0)));
     const hi = mix([GRASS_HI[0] + j * 36, GRASS_HI[1] + j * 20, GRASS_HI[2] + j * 10], CHAR_HI, s);
     const md = mix([GRASS_MID[0] + j * 44, GRASS_MID[1] + j * 34, GRASS_MID[2] + j * 8], CHAR_MID, s);
     const dp = mix([GRASS_DEEP[0] + j * 24, GRASS_DEEP[1] + j * 26, GRASS_DEEP[2] + j * 6], CHAR_DEEP, s);
@@ -963,10 +1806,11 @@ export class Terrain {
         ctx.fillRect(x, top + hh + mh + 1 + Math.floor((fr * 37) % (dpH - 2)), 1, 1);
       }
     }
-    // Occlusion shadow tucked under the sod.
-    const aoH = Math.min(8, run - d);
+    // Occlusion shadow tucked under the sod — height and strength wander with
+    // noise so the grass/dirt contact never reads as a ruled stroke.
+    const aoH = Math.min(Math.round(3 + 7 * this.noise3(x * 1.7 + 40)), run - d);
     if (aoH > 0) {
-      ctx.fillStyle = 'rgba(30,17,8,0.30)';
+      ctx.fillStyle = `rgba(30,17,8,${(0.16 + 0.24 * n2).toFixed(2)})`;
       ctx.fillRect(x, top + d, 1, aoH);
     }
     // Bottom edge of this run (overhangs, island belly).
@@ -983,6 +1827,8 @@ export class Terrain {
   paintFringe(x, y, len, scorch) {
     if (x < 0 || x >= this.w) return;
     if ((scorch || 0) > 0.5) return;
+    // No sod here (bare cliff rock) means nothing to drape over the edge.
+    if (this._sodD && this._sodD[x] < 4.5) return;
     const t = this.hash01(x * 3 + 1);
     if (t < 0.25) return;
     const l = Math.max(3, Math.round(len * (0.5 + t * 0.5)));

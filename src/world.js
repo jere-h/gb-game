@@ -19,6 +19,27 @@ const ART_X = 1100;        // max |x| the view may reach at z=0
 const VIEW_BOTTOM = -170;  // lowest world y the view bottom may reach (sea strip)
 const VIEW_TOP = 1500;     // highest world y the view top may reach
 
+// --- composition constants (see setComposition / _compose) -------------------
+// Where the shooter sits horizontally, measured from the frame edge BEHIND it:
+// the remaining ~72% of the width lies in the firing direction, so an aim frame
+// shows the corridor the shell will travel rather than centring on the tank.
+const AIM_SHOOTER_X = 0.28;
+// Where the shooter's ground line sits vertically (fraction from frame top).
+// Deliberately low: it pushes the backdrop horizon off dead-centre and shrinks
+// the featureless dirt apron below the mobile to a thin band that the HUD
+// console then covers.
+const AIM_GROUND_Y = 0.785;
+// Hard floor for the ground line in any non-aim (shot/flight) framing. The HUD
+// console owns the bottom ~12% of the viewport, so a mobile whose feet sit
+// below this ends up half-buried behind it.
+const SAFE_GROUND_Y = 0.80;
+// Tangent-crop guard: a terrain silhouette edge landing within EDGE_WINDOW of
+// the leading frame boundary reads as an accidental slice, so the frame is
+// widened until the edge clears the boundary by EDGE_PAD. Both are fractions
+// of the view half-width.
+const EDGE_WINDOW = 0.16;
+const EDGE_PAD = 0.10;
+
 export class World {
   constructor(canvas) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
@@ -49,6 +70,9 @@ export class World {
     this.target = { x: 0, y: WORLD_H * 0.3, zoom: 1400 };
     this.pos = { ...this.target };
     this.punchT = 0; // impact zoom-punch impulse (0..1, decays)
+    // Shot composition brief, refreshed every frame by main.js (see
+    // setComposition). null = leave the follow target exactly as handed over.
+    this.compose = null;
 
     this.resize();
     window.addEventListener('resize', () => this.resize());
@@ -75,6 +99,40 @@ export class World {
     this.punchT = Math.max(this.punchT, clamp(strength, 0, 1));
   }
 
+  // Half-extents of the visible rect at z=0 for the CURRENT camera. Used by
+  // anything that has to pin art to the frame edges (off-screen markers).
+  viewHalfExtents(zoom = this.camera.position.z) {
+    const halfH = Math.tan((this.camera.fov * Math.PI) / 360) * zoom;
+    return { halfH, halfW: halfH * (this.camera.aspect || 16 / 9) };
+  }
+
+  // Per-frame composition brief from the game layer. Everything is optional;
+  // the pass only acts on what it is given, so the follow()/director pipeline
+  // stays in charge of where the camera is looking and how tight it is.
+  //   mode      'aim' composes a full aim frame; anything else only applies
+  //             the ground-line guard.
+  //   shooter   { x, groundY } of the mobile whose turn it is.
+  //   facing    +1/-1 firing direction.
+  //   edges     sorted world x of terrain silhouette edges (tangent guard).
+  setComposition(c) { this.compose = c || null; }
+
+  // Nudge `x` so a terrain silhouette edge never lands right on the leading
+  // frame boundary: an island sliced exactly at the frame edge reads as an
+  // accident, so widen until it clears the boundary by EDGE_PAD.
+  _avoidTangentCrop(x, halfW, dir, edges) {
+    if (!edges || !edges.length) return x;
+    const lead = x + dir * halfW;
+    const win = halfW * EDGE_WINDOW;
+    const pad = halfW * EDGE_PAD;
+    let bestU = Infinity;
+    for (let i = 0; i < edges.length; i++) {
+      const u = (edges[i] - lead) * dir; // >0: beyond the frame, <0: inside it
+      if (Math.abs(u) < Math.abs(bestU) && Math.abs(u) < win) bestU = u;
+    }
+    if (!isFinite(bestU)) return x;
+    return x + dir * (bestU + pad);
+  }
+
   // Clamp a {x, y, zoom} view so the frustum at z=0 stays inside the art.
   _clampView(v) {
     const tanH = Math.tan((this.camera.fov * Math.PI) / 360);
@@ -92,7 +150,48 @@ export class World {
     return v;
   }
 
+  // Composition pass: runs after follow()/the FX director have chosen where to
+  // look, and re-frames that choice. Kept out of follow() on purpose — follow()
+  // is wrapped by the FX camera director, this is not, so the two never fight
+  // over the same call.
+  _compose() {
+    const c = this.compose;
+    if (!c || !c.shooter) return;
+    const t = this.target;
+    const { halfH, halfW } = this.viewHalfExtents(t.zoom);
+    const gy = c.shooter.groundY;
+
+    if (c.mode === 'aim') {
+      const dir = c.facing >= 0 ? 1 : -1;
+      // Push the shooter off-centre, against the frame edge it is firing away
+      // from, so the aim frame is mostly the ground the shell has to cross.
+      let x = c.shooter.x + dir * (0.5 - AIM_SHOOTER_X) * 2 * halfW;
+      x = this._avoidTangentCrop(x, halfW, dir, c.edges);
+      // ...but never so far that the shooter itself crowds the frame edge.
+      const back = (c.shooter.x - (x - dir * halfW)) * dir; // dist to trailing edge
+      const minBack = halfW * 2 * 0.13;
+      if (back < minBack) x -= dir * (minBack - back);
+      t.x = x;
+      t.y = gy + halfH * (2 * AIM_GROUND_Y - 1);
+      return;
+    }
+
+    // Shot/flight framing: the camera chases the shell upward, which can sink
+    // the firing mobile behind the HUD console. Hold the ground line above the
+    // console for as long as the shooter is actually on screen; the limit
+    // releases smoothly once it has left the frame.
+    const inset = Math.min(
+      (c.shooter.x - (this.pos.x - halfW)) / 260,
+      ((this.pos.x + halfW) - c.shooter.x) / 260,
+    );
+    const w = clamp(inset, 0, 1);
+    if (w <= 0) return;
+    const limit = gy + halfH * (2 * SAFE_GROUND_Y - 1);
+    t.y = Math.min(t.y, limit + (1 - w) * (VIEW_TOP - VIEW_BOTTOM));
+  }
+
   update(dt, shake = { x: 0, y: 0 }) {
+    this._compose();
     this._clampView(this.target);
     const k = 1 - Math.pow(0.0018, dt);
     this.pos.x = lerp(this.pos.x, this.target.x, k);

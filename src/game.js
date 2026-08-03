@@ -13,6 +13,25 @@ const PV_DOTS = 56;          // max marching dots rendered along the path
 const PV_SPACING = 19;       // world units between dots (~19px at aim zoom)
 const PV_SPEED = 30;         // world units/sec the dots march along the arc
 const FALL_SAFE = 120;       // free fall distance before damage kicks in
+const CHARGE_RATE = 58;      // power points per second while holding fire
+// Elevation trim accelerates while the key is held: a tap is a fine 10 deg/sec
+// nudge, a hold ramps to a fast sweep. Flat-rate aiming made single-degree
+// corrections impossible without feathering the key.
+const AIM_RATE_MIN = 10;
+const AIM_RATE_MAX = 60;
+const AIM_RAMP_DELAY = 0.30; // seconds of hold before the ramp starts
+const AIM_RAMP_TIME = 0.45;  // seconds from min rate to max rate
+// A terrain silhouette step this big counts as an island edge for the camera's
+// tangent-crop guard.
+const EDGE_DROP = 130;
+const EDGE_STEP = 12;        // world units between silhouette samples
+// The FX director owns the camera for this long after an impact (punch-in and
+// aftermath dwell). The aim composition stays out of its way until then.
+const IMPACT_DWELL = 2.45;
+const MARKER_Z = 70;         // marker plane, in front of every play-field prop
+// On-screen width of the off-screen rival chevron, sized against the viewport
+// so it stays a readable badge on desktop without eating a phone's screen.
+const markerPx = () => clamp(innerWidth * 0.108, 108, 180);
 
 export class Game {
   constructor({ scene, terrain, mobiles, effects, ui, audio, camera, seed = 1 }) {
@@ -38,9 +57,44 @@ export class Game {
     this.activeFiredBy = null;
     this._shooterClear = true;
 
+    // Camera composition state (see composition()).
+    this._edges = [];            // terrain silhouette edges, x ascending
+    this._edgesDirty = true;
+    this._aimHold = 0;           // seconds the elevation key has been held
+    this._aimDir = 0;
+    this._aimInput = false;
+    this._aimActiveT = 0;        // >0 while the player is actively lining up
+    this._aimKey = null;
+    this._sinceImpact = IMPACT_DWELL; // no impact yet: aim framing is free
+
+    // Open the match already lined up on the rival, the way a player would
+    // leave the turret after their last shot.
+    for (const m of mobiles) this.openingAim(m);
+
     ui.setWind(this.wind);
     ui.renderPlayers(mobiles);
+    ui.setAngle(this.active.aimAngle);
     ui.banner(`${this.active.name}'s turn`, 1400);
+  }
+
+  // Point a mobile down the flattest arc that actually reaches its rival, then
+  // clamp to a sane opening elevation. Flat-but-clearing is what a human picks
+  // first, and it makes the first shot of a match read as a real attempt at the
+  // other player rather than a lob into the sky.
+  openingAim(m) {
+    const foe = this.mobiles.find((o) => o.alive && o.team !== m.team);
+    if (!foe) return;
+    m.facing = foe.x > m.x ? 1 : -1;
+    let best = null;
+    for (let ang = m.type.minAngle; ang <= m.type.maxAngle; ang += 3) {
+      for (let pow = 30; pow <= 95; pow += 5) {
+        const err = this.simulateShot(m, ang, pow, foe);
+        // Flattest arc wins among everything that lands near the rival.
+        if (err !== null && err < 180 && (!best || ang < best.ang)) best = { ang, pow, err };
+      }
+    }
+    m.setAim(clamp(best ? best.ang : 40, 30, 46));
+    if (best && m === this.active) this.lastPower = best.pow;
   }
 
   get active() { return this.mobiles[this.turn]; }
@@ -59,8 +113,8 @@ export class Game {
     switch (cmd) {
       case 'left': m.facing = -1; m.move(-70 * dt); break;
       case 'right': m.facing = 1; m.move(70 * dt); break;
-      case 'up': m.setAim(m.aimAngle + 40 * dt); this.ui.setAngle(m.aimAngle); break;
-      case 'down': m.setAim(m.aimAngle - 40 * dt); this.ui.setAngle(m.aimAngle); break;
+      case 'up': this.trimAim(m, 1, dt); break;
+      case 'down': this.trimAim(m, -1, dt); break;
       case 'chargeStart':
         if (this.state === 'aim') { this.state = 'charging'; this.power = 0; }
         break;
@@ -71,6 +125,18 @@ export class Game {
         this.fire(100);
         break;
     }
+  }
+
+  // Elevation trim with an accelerating rate: precise on a tap, quick on a
+  // hold. `_aimHold` is reset in update() on any frame with no elevation input.
+  trimAim(m, dir, dt) {
+    if (dir !== this._aimDir) { this._aimDir = dir; this._aimHold = 0; }
+    this._aimInput = true;
+    const ramp = clamp((this._aimHold - AIM_RAMP_DELAY) / AIM_RAMP_TIME, 0, 1);
+    const rate = AIM_RATE_MIN + (AIM_RATE_MAX - AIM_RATE_MIN) * ramp;
+    this._aimHold += dt;
+    m.setAim(m.aimAngle + dir * rate * dt);
+    this.ui.setAngle(m.aimAngle);
   }
 
   fire(power) {
@@ -100,6 +166,8 @@ export class Game {
   // --- per-frame -------------------------------------------------------------
 
   update(dt) {
+    this._sinceImpact += dt;
+    this._trackAimActivity(dt);
     if (this.state === 'over') return;
 
     if (this.state === 'resolving') {
@@ -124,7 +192,7 @@ export class Game {
         }
       }
       if (this.state === 'charging') {
-        this.power = clamp(this.power + 55 * dt, 0, 100);
+        this.power = clamp(this.power + CHARGE_RATE * dt, 0, 100);
         this.ui.setPower(this.power);
       }
       const m = this.active;
@@ -179,6 +247,8 @@ export class Game {
     const preY = new Map();
     for (const m of this.mobiles) preY.set(m, m.y);
 
+    this._sinceImpact = 0;
+    this._edgesDirty = true;
     this.terrain.carve(impact.x, impact.y, p.blastRadius * 0.8);
     this.effects.explosion(impact.x, impact.y, p.blastRadius);
     this.audio.explosion(1);
@@ -237,6 +307,8 @@ export class Game {
     this.introT = 0.8; // wind-changes beat before the clock runs
     this.aiPlan = null;
     this._pvKey = null;
+    this._aimActiveT = 0;
+    this._aimKey = null;
     this.ui.setAngle(this.active.aimAngle);
     this.ui.banner(`${this.active.name}'s turn`, 1200);
   }
@@ -377,6 +449,192 @@ export class Game {
     geo.setDrawRange(0, count);
     geo.attributes.position.needsUpdate = true;
     geo.attributes.aAlpha.needsUpdate = true;
+  }
+
+  // --- camera composition -----------------------------------------------------
+
+  // Only real aiming input (elevation/move/facing, or charging) counts as
+  // "lining up a shot"; the turn-start beat stays on the wide establishing
+  // framing so the overview moment is not swallowed by the close-up.
+  _trackAimActivity(dt) {
+    const m = this.active;
+    if (!m || (this.state !== 'aim' && this.state !== 'charging')) {
+      this._aimKey = null;
+      this._aimActiveT = 0;
+    } else {
+      const key = `${m.aimAngle.toFixed(2)}|${m.x.toFixed(1)}|${m.facing}`;
+      if (this._aimKey !== null && key !== this._aimKey) this._aimActiveT = 5;
+      if (this.state === 'charging') this._aimActiveT = Math.max(this._aimActiveT, 2);
+      this._aimKey = key;
+      if (this._aimActiveT > 0) this._aimActiveT -= dt;
+    }
+    if (!this._aimInput) { this._aimDir = 0; this._aimHold = 0; }
+    this._aimInput = false;
+  }
+
+  // Terrain silhouette edges (island rims): world x values where the surface
+  // steps by more than EDGE_DROP. Recomputed only after the ground changes —
+  // scanning the whole mask every frame would not be free.
+  silhouetteEdges() {
+    if (!this._edgesDirty) return this._edges;
+    this._edgesDirty = false;
+    const half = this.terrain.w / 2;
+    const out = [];
+    let prev = this.terrain.surfaceY(-half + EDGE_STEP);
+    for (let x = -half + 2 * EDGE_STEP; x < half; x += EDGE_STEP) {
+      const s = this.terrain.surfaceY(x);
+      if (Math.abs(s - prev) > EDGE_DROP) out.push(x - EDGE_STEP * 0.5);
+      prev = s;
+    }
+    this._edges = out;
+    return out;
+  }
+
+  // Per-frame framing brief for the camera rig (see World.setComposition).
+  composition() {
+    const m = this.active;
+    if (!m) return null;
+    const shooter = { x: m.x, groundY: m.y };
+    const aiming = (this.state === 'aim' || this.state === 'charging')
+      && this._aimActiveT > 0
+      && this._sinceImpact >= IMPACT_DWELL;
+    if (!aiming) return { mode: 'shot', shooter };
+    return {
+      mode: 'aim',
+      shooter,
+      facing: m.facing,
+      edges: this.silhouetteEdges(),
+    };
+  }
+
+  // --- off-screen rival indicator ----------------------------------------------
+  // An aim frame has to answer "where am I shooting". When the rival is outside
+  // the close-up framing, a chevron rides the frame edge at the rival's height
+  // with the range to it, so the empty side of the frame carries information
+  // instead of dead ground.
+
+  // Chevron + range plate, drawn side-correct (dir +1 = points right) so the
+  // sprite is never mirrored and the numerals stay readable.
+  _markerCanvas(distance, dir) {
+    const c = this._mkCanvas || (this._mkCanvas = document.createElement('canvas'));
+    const W = 256, H = 128;
+    c.width = W; c.height = H;
+    const g = c.getContext('2d');
+    g.clearRect(0, 0, W, H);
+    const flip = dir < 0;
+    const px = (x) => (flip ? W - x : x);
+
+    // Plate: navy body, gold rim — the HUD's own material.
+    const x0 = 20, y0 = 28, w = 176, h = 72, r = 20;
+    const plate = (inset, fill, stroke, lw) => {
+      g.beginPath();
+      const bx = flip ? W - x0 - w : x0;
+      g.roundRect(bx + inset, y0 + inset, w - inset * 2, h - inset * 2, Math.max(4, r - inset));
+      if (fill) { g.fillStyle = fill; g.fill(); }
+      if (stroke) { g.strokeStyle = stroke; g.lineWidth = lw; g.stroke(); }
+    };
+    plate(0, 'rgba(16,26,62,0.94)', '#0b1130', 9);
+    plate(4.5, null, '#f2c14e', 5);
+
+    // Chevron pointing off-frame.
+    g.beginPath();
+    g.moveTo(px(246), 64); g.lineTo(px(206), 26); g.lineTo(px(206), 102); g.closePath();
+    g.strokeStyle = '#0b1130';
+    g.lineWidth = 9;
+    g.lineJoin = 'round';
+    g.stroke();
+    g.fillStyle = '#ffd257';
+    g.fill();
+
+    // Range readout.
+    const cx = flip ? W - x0 - w * 0.5 : x0 + w * 0.5;
+    const label = `${Math.round(distance / 10) * 10}m`;
+    g.font = "800 42px 'Baloo 2', 'Trebuchet MS', sans-serif";
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    g.lineWidth = 8;
+    g.lineJoin = 'round';
+    g.strokeStyle = '#0b1130';
+    g.strokeText(label, cx, y0 + h * 0.54);
+    g.fillStyle = '#ffe9a8';
+    g.fillText(label, cx, y0 + h * 0.54);
+    return c;
+  }
+
+  _ensureTargetMarker() {
+    if (this.marker) return;
+    const tex = new THREE.CanvasTexture(this._markerCanvas(0, 1));
+    tex.colorSpace = THREE.SRGBColorSpace;
+    const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false });
+    this.marker = new THREE.Sprite(mat);
+    this.marker.renderOrder = 60;
+    this.marker.visible = false;
+    this.marker.center.set(0.5, 0.5);
+    this.scene.add(this.marker);
+    this._mkTex = tex;
+    this._mkLabel = -1;
+    this._mkDir = 1;
+    // The HUD font arrives asynchronously; redraw once it is ready.
+    if (document.fonts && document.fonts.ready) {
+      document.fonts.ready.then(() => { this._mkLabel = -1; }).catch(() => {});
+    }
+  }
+
+  _hideTargetMarker() {
+    if (this.marker) this.marker.visible = false;
+  }
+
+  // Screen-pinned overlays are placed from the LIVE camera, so main.js calls
+  // this right after the rig has moved. Doing it inside update() would pin the
+  // marker with a camera one smoothing step out of date — which reads fine in
+  // motion but drifts the chevron off-frame whenever the sim is paused and the
+  // rig keeps easing (exactly what screenshot capture does).
+  updateOverlays() {
+    const m = this.active;
+    const live = (this.state === 'aim' || this.state === 'charging') && m && !m.isAI;
+    if (live) this._updateTargetMarker();
+    else this._hideTargetMarker();
+  }
+
+  _updateTargetMarker() {
+    const m = this.active;
+    const cam = this.camera;
+    if (!m || m.isAI || !cam) { this._hideTargetMarker(); return; }
+    const foe = this.mobiles.find((o) => o.alive && o.team !== m.team);
+    if (!foe) { this._hideTargetMarker(); return; }
+    this._ensureTargetMarker();
+
+    // Frustum half-extents AT THE MARKER'S OWN Z PLANE — it rides in front of
+    // the play field, so measuring the frame edge at z=0 would place it a
+    // chunk of its own width off-screen.
+    const halfH = Math.tan((cam.fov * Math.PI) / 360) * (cam.position.z - MARKER_Z);
+    const halfW = halfH * (cam.aspect || 16 / 9);
+    const perPx = (2 * halfH) / Math.max(1, innerHeight);
+    const dir = foe.x > cam.position.x ? 1 : -1;
+    // The sprite is centred on its position, so the inset has to clear half of
+    // its own width plus a margin or the chevron hangs off the frame.
+    const wPx = markerPx();
+    const inset = perPx * (wPx * 0.5 + 18);
+    const edge = cam.position.x + dir * (halfW - inset);
+    // Visible (with room to spare)? Then the frame already answers the
+    // question and a chevron would only be clutter.
+    if ((foe.x - edge) * dir < perPx * 40) { this._hideTargetMarker(); return; }
+
+    const label = Math.round(Math.hypot(foe.x - m.x, foe.y - m.y) / 10) * 10;
+    if (label !== this._mkLabel || dir !== this._mkDir) {
+      this._mkLabel = label;
+      this._mkDir = dir;
+      this._mkTex.image = this._markerCanvas(label, dir);
+      this._mkTex.needsUpdate = true;
+    }
+    // Ride the rival's height, but stay clear of the HUD strips.
+    const yLo = cam.position.y - halfH + 2 * halfH * 0.20;
+    const yHi = cam.position.y + halfH - 2 * halfH * 0.14;
+    const y = clamp(foe.y + 40, Math.min(yLo, yHi), Math.max(yLo, yHi));
+    const w = perPx * wPx;
+    this.marker.scale.set(w, w * 0.5, 1);
+    this.marker.position.set(edge, y, MARKER_Z);
+    this.marker.visible = true;
   }
 
   // --- AI --------------------------------------------------------------------

@@ -83,6 +83,9 @@ function simulate(rawDt, nowSec) {
   for (const m of mobiles) if (m.alive) m.syncTransform();
 
   const wide = game.state === 'flying';
+  // Framing brief first: world.follow() is wrapped by the FX camera director,
+  // so the composition pass reads the brief later, in world.update().
+  world.setComposition(game.composition());
   world.follow(game.focus.x, game.focus.y, wide);
 }
 
@@ -96,6 +99,9 @@ function loop(now) {
   }
 
   // Paused (stepsPerFrame 0) still renders, so a paused frame can be captured.
+  // Overlays pinned to the frame edge are placed from the camera the rig just
+  // settled on (see Game.updateOverlays).
+  game.updateOverlays();
   world.update(rawDt * Math.max(1, stepsPerFrame), effects.shakeOffset());
   requestAnimationFrame(loop);
 }
