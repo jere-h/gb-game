@@ -36,40 +36,72 @@ export class Projectile {
     // it (1.9 x 0.85): the hero object of the mid-flight frame has to be the
     // most readable thing in it, not a pale dot with less contrast than its
     // own exhaust.
+    // The POINT goes at the LEADING edge. The previous build put a fat black
+    // cone on the trailing end and a blunt round nose in front, so in a still
+    // the shell read as a lemon slice flying backwards. The whole group is
+    // rotated to atan2(vy,vx) every frame and stretched 1.55x along velocity
+    // so the speed is legible without motion blur.
     const SR = 10.5;
-    this.mesh = new THREE.Mesh(
-      new THREE.SphereGeometry(SR, 14, 12),
-      new THREE.MeshBasicMaterial({ color })
-    );
+    this.mesh = new THREE.Group();
     this.mesh.position.set(x, y, 40);
-    this.mesh.scale.set(1.9, 0.85, 1);
-    this.mesh.renderOrder = 26;
+    this.mesh.scale.set(1.55, 0.92, 1);
     scene.add(this.mesh);
 
+    const body = new THREE.Mesh(
+      new THREE.SphereGeometry(SR, 16, 12),
+      new THREE.MeshBasicMaterial({ color })
+    );
+    body.renderOrder = 26;
+    this.mesh.add(body);
+
+    // Leading nose cone, in the shell's own hot colour rather than ink.
+    const nose = new THREE.Mesh(
+      new THREE.ConeGeometry(SR * 0.88, SR * 1.9, 12),
+      new THREE.MeshBasicMaterial({ color: '#fff2c0' })
+    );
+    nose.rotation.z = -Math.PI / 2; // cone +y -> +x (forwards)
+    nose.position.x = SR * 1.0;
+    nose.renderOrder = 26;
+    this.mesh.add(nose);
+
+    // Thin WARM rim instead of the old fat dark-brown outline: a heavy ink
+    // line on a glowing object kills any sense that the thing is hot, while a
+    // warm rim still separates it from white clouds.
+    const rim = new THREE.Mesh(
+      new THREE.SphereGeometry(SR, 16, 12),
+      new THREE.MeshBasicMaterial({ color: '#e8551a', side: THREE.BackSide })
+    );
+    rim.scale.setScalar(1.13);
+    rim.renderOrder = 25;
+    this.mesh.add(rim);
+    const rimNose = new THREE.Mesh(
+      new THREE.ConeGeometry(SR * 0.88, SR * 1.9, 12),
+      new THREE.MeshBasicMaterial({ color: '#e8551a', side: THREE.BackSide })
+    );
+    rimNose.rotation.z = -Math.PI / 2;
+    rimNose.position.x = SR * 1.0;
+    rimNose.scale.setScalar(1.13);
+    rimNose.renderOrder = 25;
+    this.mesh.add(rimNose);
+
+    // Small tail fins at the BACK, dark so the rear end reads as the cold end.
+    const fin = new THREE.Mesh(
+      new THREE.ConeGeometry(SR * 0.62, SR * 0.75, 6),
+      new THREE.MeshBasicMaterial({ color: '#8a3410' })
+    );
+    fin.rotation.z = Math.PI / 2;
+    fin.position.x = -SR * 1.02;
+    fin.renderOrder = 26;
+    this.mesh.add(fin);
+
+    // White-hot core, pushed toward the nose so the shell reads as lit.
     const core = new THREE.Mesh(
-      new THREE.SphereGeometry(SR * 0.52, 10, 8),
-      new THREE.MeshBasicMaterial({ color: '#fffdf0' })
+      new THREE.SphereGeometry(SR * 0.58, 12, 10),
+      new THREE.MeshBasicMaterial({ color: '#fff6d0' })
     );
-    core.position.x = SR * 0.22; // hot leading edge, not a dead-centre dot
+    core.position.x = SR * 0.34;
+    core.renderOrder = 27;
     this.mesh.add(core);
-
-    // Dark cartoon outline (inverted hull) so the shell holds up against the
-    // white clouds it flies across as well as against the sky.
-    const outline = new THREE.Mesh(
-      new THREE.SphereGeometry(SR, 14, 12),
-      new THREE.MeshBasicMaterial({ color: '#1d1108', side: THREE.BackSide })
-    );
-    outline.scale.setScalar(1.3);
-    this.mesh.add(outline);
-
-    // Tail fin cone pointing opposite the flight direction.
-    const tail = new THREE.Mesh(
-      new THREE.ConeGeometry(5.2, 11, 8),
-      new THREE.MeshBasicMaterial({ color: '#1d1108' })
-    );
-    tail.rotation.z = Math.PI / 2; // cone +y -> -x (backwards)
-    tail.position.x = -SR * 1.25;
-    this.mesh.add(tail);
 
     // Halo stack lives in the scene, NOT under the stretched mesh: sprites
     // decompose their world matrix, so a non-uniform parent scale would shear
@@ -216,15 +248,26 @@ export class Projectile {
     const px = this._puffPX ?? this.x, py = this._puffPY ?? this.y;
     const dx = this.x - px, dy = this.y - py;
     const dist = Math.hypot(dx, dy);
-    const STEP = 17; // world units between puffs (puffs are ~20u wide at spawn)
+    const STEP = 14; // world units between puffs (puffs are ~14u wide at spawn)
     let total = (this._puffCarry ?? 0) + dist;
     while (total >= STEP) {
       total -= STEP;
       const t = dist > 0 ? 1 - total / dist : 0;
       const sx = px + dx * t, sy = py + dy * t;
       this._puffN = (this._puffN || 0) + 1;
+      // Heat lives at the SHELL, not along the whole arc: a short-lived warm
+      // ember rides each fresh puff for ~0.13s and is gone before the puff has
+      // drifted, while the puff itself is cool grey. A muddy tan band running
+      // the whole arc over a blue sky reads as dirt on the glass and stains
+      // the white clouds khaki.
       fxSpawn({
-        tex: 'puff',
+        tex: 'glow', x: sx, y: sy, z: 38,
+        vx: -this.vx * 0.05, vy: -this.vy * 0.05,
+        dur: 0.13, size: 16, size1: 6,
+        color: '#ffb87a', opacity: 0.75, fade: 'out',
+      });
+      fxSpawn({
+        tex: 'puffFirm',
         x: sx + (vrng() - 0.5) * 7, y: sy + (vrng() - 0.5) * 7, z: 37,
         // Every puff is pushed leeward by the wind, and older puffs have had
         // longer to drift, so the exhaust column visibly bows downwind instead
@@ -236,13 +279,14 @@ export class Projectile {
         // Strong growth over life: near the shell the puffs are small and
         // tight, back at the barrel they have bloomed to ~3.6x, so the trail
         // tapers from a fat, ragged root to a crisp head.
-        dur: 1.35 + vrng() * 0.5,
-        size: 18 + vrng() * 9, size1: 104 + vrng() * 34,
+        dur: 0.95 + vrng() * 0.35,
+        // Half the old terminal size: 104-138 unit puffs merged into a
+        // constant-width ruler-straight band that never tapered.
+        size: 8 + vrng() * 6, size1: 44 + vrng() * 16,
         aspect: 0.82 + vrng() * 0.42,
-        // Temperature gradient: hot exhaust right behind the shell cooling to
-        // grey smoke as it ages.
-        color: '#e6c9a4', color1: '#8f877e', opacity: 0.6 + vrng() * 0.1,
-        fade: 'trail', rot: vrng() * TAU_P, spin: (vrng() - 0.5) * 1.6,
+        // Cool grey exhaust, never tan.
+        color: '#e8e4dc', color1: '#a9a49c', opacity: 0.3 + vrng() * 0.08,
+        fade: 'trail', rot: vrng() * TAU_P, spin: (vrng() - 0.5) * 2.2,
       });
     }
     this._puffCarry = total;
@@ -266,18 +310,26 @@ export class Projectile {
       const len = Math.hypot(dx, dy) || 1;
       dx /= len; dy /= len;
       const t = i / (TRAIL_MAX - 1);
-      const w = 9.5 * Math.pow(1 - t, 1.25) + 0.3; // fat head, taper to nothing
+      // Minimum width 2.4 world units (~3px on screen): the old +0.3 tail left
+      // a sub-pixel sliver that rendered as a hard 1px pink/orange hairline
+      // with no falloff — a rendering artifact, not a heat line.
+      const w = 9.0 * Math.pow(1 - t, 1.1) + 2.4;
       const px = -dy * w, py = dx * w;
       const o = i * 6;
       P[o] = p.x + px; P[o + 1] = p.y + py; P[o + 2] = 38;
       P[o + 3] = p.x - px; P[o + 4] = p.y - py; P[o + 5] = 38;
-      // Additive: darker = more transparent. Comet ramp — white only at the
-      // very head, quickly cooling through amber/orange to a dim red tail.
-      const f = 1 - t;
-      const head = Math.pow(f, 7); // narrow white-hot tip
-      const cr = Math.min(1, 1.3 * f + head * 0.7);
-      const cg = Math.min(1, 0.55 * Math.pow(f, 1.7) + head * 0.9);
-      const cb = Math.min(1, 0.1 * Math.pow(f, 3) + head * 0.95);
+      // Additive: darker = more transparent. The ribbon is now the HEAT at the
+      // shell only — it reaches literal zero by ~60% back, so it can never
+      // leave a coloured line hanging in the sky. The body of the trail is
+      // carried by the discrete smoke puffs instead.
+      const f = Math.max(0, 1 - t / 0.62);
+      const g2 = f * f;
+      // Amber head, not white: a blown-out white ribbon root sitting directly
+      // BEHIND the shell made the trailing edge look like the hot end.
+      const head = Math.pow(f, 6);
+      const cr = Math.min(1, 0.95 * g2 + head * 0.35);
+      const cg = Math.min(1, 0.5 * Math.pow(g2, 1.5) + head * 0.3);
+      const cb = Math.min(1, 0.12 * Math.pow(g2, 2.4) + head * 0.18);
       C[o] = cr; C[o + 1] = cg; C[o + 2] = cb;
       C[o + 3] = cr; C[o + 4] = cg; C[o + 5] = cb;
     }
@@ -327,9 +379,9 @@ export class Projectile {
     this.glow.scale.set(gs, gs, 1);
     this._halo.position.set(this.x, this.y, 41);
     this._halo.material.rotation = ang + this._age * 1.2;
-    const nx = this.x + Math.cos(ang) * 7, ny = this.y + Math.sin(ang) * 7;
+    const nx = this.x + Math.cos(ang) * 20, ny = this.y + Math.sin(ang) * 20;
     this._nose.position.set(nx, ny, 41);
-    const ns = 16 * (1 + Math.sin(this._age * 50 + 1.2) * 0.12);
+    const ns = 27 * (1 + Math.sin(this._age * 50 + 1.2) * 0.12);
     this._nose.scale.set(ns, ns, 1);
     this._updateTrail();
     this._emitSparks(dt);

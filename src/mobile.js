@@ -3,12 +3,35 @@
 // terrain, tilts with the slope, aims a barrel, idles with a gentle breathing
 // bob, and shows damage (scorch tint, flickering embers) as hp drops.
 //
+// ROSTER DESIGN (the two mobiles must read as one art kit, like GunBound's
+// Armor / Turtle / Mage):
+//   BOOMER (player, cyan)  — a ROUND, soft, friendly blob. One continuous
+//     silhouette: the face is painted straight onto the front plate of the
+//     body, so there is no bolted-on head sphere and no seam. Two fat round
+//     road wheels bump out of the bottom edge.
+//   RAIDER (rival, red)    — an ANGULAR, long, low WEDGE. Chamfered trapezoid
+//     hull, heavy scowling brow ridge, narrow glowing slit eyes, a bared-fang
+//     grin, and continuous TREADS instead of round wheels.
+// As pure black shapes at 90px the two are unmistakable: circle vs wedge.
+//
+// Both share the same art rules: identical hull construction (one extruded
+// silhouette with a fat bevelled rim), identical eye rig (sclera + pupil +
+// glint + brow), one and only one element that reads as a gun (the rear
+// cylinder is deliberately styled as a sooty gunmetal exhaust), the same
+// outline weights, and the same contact shadow.
+//
 // Visual techniques:
 //  - Cel shading: MeshToonMaterial + a shared 4-step DataTexture gradient map.
+//  - Hull silhouettes: ExtrudeGeometry from a hand-authored 2D outline. The
+//    bevel flares the outline outward by `bevelSize`, so the FLAT front cap
+//    sits at z = depth/2 + bevelThickness and is inset from the silhouette by
+//    `bevelSize`. That flat cap is the "face plate": everything painted on it
+//    is guaranteed to stay inside the body's outline.
 //  - Black outlines: inverted-hull (BackSide black shells) on major parts.
 //    three.js flips winding for negative-determinant transforms, so the
 //    outlines stay correct when the whole group mirrors via scale.x = facing.
-//  - Soft blob shadow (radial-gradient plane) hugging the ground.
+//  - Elliptical contact shadow parented inside the group, so it is squashed to
+//    the local terrain slope for free.
 
 import * as THREE from 'three';
 import { clamp, rad } from './util.js';
@@ -36,12 +59,16 @@ function gradientMap() {
   return _gradientMap;
 }
 
-let _outlineMat = null;
-function outlineMat() {
-  if (!_outlineMat) {
-    _outlineMat = new THREE.MeshBasicMaterial({ color: '#141224', side: THREE.BackSide });
+// Outline ink, cached per colour. Both mobiles use a near-black tinted toward
+// their own hue (cool navy / warm oxblood) — hand-painted cartoon art almost
+// never inks with pure black, and the slightly lower contrast also softens the
+// staircase on the un-antialiased composer pass.
+const _outlineMats = {};
+function outlineMat(color = '#141224') {
+  if (!_outlineMats[color]) {
+    _outlineMats[color] = new THREE.MeshBasicMaterial({ color, side: THREE.BackSide });
   }
-  return _outlineMat;
+  return _outlineMats[color];
 }
 
 function radialTexture(stops) {
@@ -64,7 +91,7 @@ function radialTexture(stops) {
 // with camera distance (see _updateGrounding).
 let _shadowCircle = null;
 function shadowCircle() {
-  if (!_shadowCircle) _shadowCircle = new THREE.CircleGeometry(1, 30);
+  if (!_shadowCircle) _shadowCircle = new THREE.CircleGeometry(1, 32);
   return _shadowCircle;
 }
 
@@ -96,6 +123,98 @@ function emberTexture() {
 }
 
 const SCORCH = new THREE.Color('#241a16');
+
+// --- silhouette authoring ---------------------------------------------------
+
+// Closed rounded polygon from [x, y, cornerRadius] triples. Big radii on a
+// 7-gon give a soft blob; tiny radii on the same code path give a crisp
+// chamfered wedge — so both hulls come out of one authoring primitive and are
+// guaranteed to share a construction language.
+function roundedShape(pts) {
+  const s = new THREE.Shape();
+  const n = pts.length;
+  const P = (i) => pts[((i % n) + n) % n];
+  const toward = (a, b, d) => {
+    const dx = b[0] - a[0], dy = b[1] - a[1];
+    const L = Math.hypot(dx, dy) || 1;
+    const t = Math.min(d, L * 0.5) / L;
+    return [a[0] + dx * t, a[1] + dy * t];
+  };
+  for (let i = 0; i < n; i++) {
+    const cur = P(i), r = cur[2] || 0;
+    const a = toward(cur, P(i - 1), r);
+    const b = toward(cur, P(i + 1), r);
+    if (i === 0) s.moveTo(a[0], a[1]); else s.lineTo(a[0], a[1]);
+    if (r > 0) s.quadraticCurveTo(cur[0], cur[1], b[0], b[1]);
+    else s.lineTo(b[0], b[1]);
+  }
+  s.closePath();
+  return s;
+}
+
+// ExtrudeGeometry emits flat (non-indexed) normals, which facets the bevel
+// into visible triangles. Average normals between coincident vertices whose
+// normals are within `maxAngle` of each other: the bevel ring smooths into a
+// rounded rim while the hard cap/rim crease stays crisp. Runs twice per match.
+function smoothNormals(geo, maxAngleDeg = 62) {
+  const pos = geo.attributes.position, nor = geo.attributes.normal;
+  if (!pos || !nor) return geo;
+  const n = pos.count;
+  const buckets = new Map();
+  for (let i = 0; i < n; i++) {
+    const k = `${Math.round(pos.getX(i) * 50)},${Math.round(pos.getY(i) * 50)},${Math.round(pos.getZ(i) * 50)}`;
+    let a = buckets.get(k);
+    if (!a) buckets.set(k, a = []);
+    a.push(i);
+  }
+  const cosT = Math.cos((maxAngleDeg * Math.PI) / 180);
+  const out = new Float32Array(n * 3);
+  const ni = new THREE.Vector3(), nj = new THREE.Vector3(), acc = new THREE.Vector3();
+  for (const idxs of buckets.values()) {
+    for (const i of idxs) {
+      ni.fromBufferAttribute(nor, i);
+      acc.set(0, 0, 0);
+      for (const j of idxs) {
+        nj.fromBufferAttribute(nor, j);
+        if (nj.dot(ni) >= cosT) acc.add(nj);
+      }
+      if (acc.lengthSq() < 1e-8) acc.copy(ni);
+      acc.normalize();
+      out[i * 3] = acc.x; out[i * 3 + 1] = acc.y; out[i * 3 + 2] = acc.z;
+    }
+  }
+  nor.array.set(out);
+  nor.needsUpdate = true;
+  return geo;
+}
+
+// Extrude a shape into a centred, chunky slab. Returns the geometry; the flat
+// front cap ends up at z = faceZ(o), which is where every painted-on face
+// detail is anchored.
+function slab(shape, o) {
+  const geo = new THREE.ExtrudeGeometry(shape, {
+    depth: o.depth,
+    bevelEnabled: true,
+    bevelThickness: o.bevelThickness,
+    bevelSize: o.bevelSize,
+    bevelOffset: 0,
+    bevelSegments: o.bevelSegments,
+    curveSegments: o.curveSegments,
+  });
+  geo.translate(0, 0, -o.depth / 2);
+  smoothNormals(geo);
+  return geo;
+}
+const faceZ = (o) => o.depth / 2 + o.bevelThickness;
+
+// The bevel is the single strongest silhouette dial: a fat 9-unit bevel melts
+// every corner into a soft blob (Boomer), a tight 4-unit chamfer keeps hard
+// creases and straight runs (Raider). Same construction, opposite read.
+const HULL_ROUND = { depth: 18, bevelThickness: 11, bevelSize: 9, bevelSegments: 5, curveSegments: 14 };
+const HULL_HARD = { depth: 22, bevelThickness: 7, bevelSize: 4.5, bevelSegments: 3, curveSegments: 6 };
+// Track slab: thinner, tighter rim.
+const TRACK = { depth: 10, bevelThickness: 6, bevelSize: 5, bevelSegments: 3, curveSegments: 10 };
+const TRACK_FACE = faceZ(TRACK);
 
 // Scratch vectors for the per-frame barrel screen-angle correction.
 const _bp0 = new THREE.Vector3();
@@ -135,17 +254,22 @@ export class Mobile {
     return m;
   }
 
+  // Unlit flat colour (faces, glints, bores). Also scorch-tinted so a wrecked
+  // mobile does not keep a pristine white grin.
+  flat(color, tint = true) {
+    const m = new THREE.MeshBasicMaterial({ color });
+    if (tint) this.tintable.push({ mat: m, orig: new THREE.Color(color), k: 0.55 });
+    return m;
+  }
+
   // Inverted-hull outline with a SCREEN-CONSTANT line weight.
   //
-  // The old version scaled the hull copy uniformly, which grows a
-  // non-uniformly-scaled ellipsoid by different world amounts on each axis
-  // (thick on the long axis, thin on the short one) and got thinner the
-  // further the camera pulled back. Instead the shell is grown per axis by the
-  // SAME world distance `d` — computed each frame from the camera distance so
-  // `px` is a true pixel width — using the geometry's per-axis half extent:
+  // The shell copy is grown per axis by the SAME world distance `d` — computed
+  // each frame from the camera distance so `px` is a true pixel width — using
+  // the geometry's per-axis half extent:
   //     scale_i' = scale_i * (1 + d / (extent_i * |scale_i|))
   // Every structural mesh gets one, so the line weight is uniform across the
-  // whole model (body, arms, barrel, wheels) at every zoom level.
+  // whole model (hull, treads, barrel, wheels) at every zoom level.
   outline(mesh, px = 2.6) {
     const geo = mesh.geometry;
     if (!geo.boundingBox) geo.computeBoundingBox();
@@ -155,7 +279,7 @@ export class Mobile {
       Math.max(Math.abs(bb.min.y), Math.abs(bb.max.y)),
       Math.max(Math.abs(bb.min.z), Math.abs(bb.max.z)),
     );
-    const o = new THREE.Mesh(geo, outlineMat());
+    const o = new THREE.Mesh(geo, outlineMat(this.ink));
     o.position.copy(mesh.position);
     o.rotation.copy(mesh.rotation);
     o.scale.copy(mesh.scale);
@@ -186,6 +310,115 @@ export class Mobile {
     return m;
   }
 
+  // --- shared roster kit -----------------------------------------------------
+
+  // ONE eye rig, used by both mobiles. `w`/`h` set the lid opening (Boomer's is
+  // round and wide-open, Raider's is a narrow hostile slit); `browTilt` is
+  // negative for a frown pointed at the enemy. Everything is anchored on the
+  // hull's flat front plate, so eyes never bolt onto a separate head.
+  eye(g, x, y, {
+    w = 7.4, h = 7.4, sclera, pupil, pupilW = 1, pupilR = 4.4, ink = '#101a2e',
+    browTilt = -0.2, browW = 12, browH = 3.4, browCol, browY = 9.6, glint = 1.9,
+  }) {
+    const z = this.faceZ + 2.5;
+    const sc = this.part(g, new THREE.SphereGeometry(1, 16, 13), sclera, x, y, z,
+      { sx: w, sy: h, sz: Math.min(w, h) * 0.42 });
+    this.outline(sc, 1.7);
+    const pr = pupilR;
+    const px = x + w * 0.17, py = y - h * 0.08;
+    this.part(g, new THREE.SphereGeometry(1, 14, 11), pupil, px, py, z + 2.4,
+      { sx: pr * pupilW, sy: pr, sz: pr * 0.4 });
+    // ONE catchlight, kept fully inside the pupil so it never bites a notch
+    // out of the pupil's rim at game zoom.
+    this.part(g, new THREE.SphereGeometry(glint, 9, 7), this.glintM,
+      px + pr * pupilW * 0.42, py + pr * 0.44, z + 4.0);
+    const brow = this.part(g, new THREE.BoxGeometry(browW, browH, 3.2), browCol || pupil,
+      x + 0.4, y + browY, z + 1.2, { rz: browTilt });
+    this.outline(brow, 1.5);
+    return sc;
+  }
+
+  // Heavy tapered barrel shared by both chassis: breech, long tube, one warm
+  // recoil collar, and a flared/braked muzzle with a black bore. This is the
+  // ONLY element on either mobile allowed to read as a gun.
+  // Returns the pivot-to-bore distance so muzzleState() stays exact.
+  buildCannon(px, py, { angular = false, tube, accent, lite, ink }) {
+    this.pivotX = px;
+    this.pivotY = py;
+    this.barrelPivot = new THREE.Group();
+    this.barrelPivot.position.set(px, py, 0);
+    this.bodyGroup.add(this.barrelPivot);
+    this.barrelGroup = new THREE.Group();
+    this.barrelPivot.add(this.barrelGroup);
+    const bg = this.barrelGroup;
+    const bore = this.flat('#0b0e17', false);
+
+    if (angular) {
+      // Raider: boxy mantlet + hexagonal tube + slotted square muzzle brake.
+      const mantlet = this.part(bg, new THREE.BoxGeometry(22, 26, 26), tube, 2, 0, 0, { rz: 0.12 });
+      this.outline(mantlet, 3.0);
+      const barrel = this.part(bg, new THREE.CylinderGeometry(9.6, 11.6, 44, 6), tube, 30, 0, 0,
+        { rz: -Math.PI / 2, ry: 0.26 });
+      this.outline(barrel, 3.2);
+      const collar = this.part(bg, new THREE.BoxGeometry(7, 27, 27), accent, 17, 0, 0, { rz: 0.12 });
+      this.outline(collar, 2.4);
+      const brake = this.part(bg, new THREE.BoxGeometry(17, 29, 27), tube, 55, 0, 0);
+      this.outline(brake, 3.0);
+      // Brake slots (two dark bites out of the block) + bright top facet.
+      for (const sy of [8.5, -8.5]) {
+        this.part(bg, new THREE.BoxGeometry(6, 6.5, 29), this.flat('#181d2a', false), 55, sy, 0);
+      }
+      this.part(bg, new THREE.BoxGeometry(38, 3.4, 4), lite, 34, 9.4, 9);
+      this.part(bg, new THREE.CylinderGeometry(9.2, 9.2, 2, 16), bore, 64, 0, 0,
+        { rz: -Math.PI / 2 });
+      return 65;
+    }
+
+    // Boomer: rounded breech + smooth tapered tube + brass-ringed bell muzzle.
+    const breech = this.part(bg, new THREE.SphereGeometry(13.5, 18, 14), tube, 0, 0, 0,
+      { sx: 1.05, sy: 1, sz: 0.95 });
+    this.outline(breech, 3.0);
+    const barrel = this.part(bg, new THREE.CylinderGeometry(10.2, 12.2, 46, 22), tube, 26, 0, 0,
+      { rz: -Math.PI / 2 });
+    this.outline(barrel, 3.2);
+    const collar = this.part(bg, new THREE.CylinderGeometry(13.4, 13.4, 6.5, 22), accent, 24, 0, 0,
+      { rz: -Math.PI / 2 });
+    this.outline(collar, 2.4);
+    // Long low-contrast light catch: reads as a cylinder highlight, not a band.
+    this.part(bg, new THREE.CylinderGeometry(2.0, 2.0, 30, 8), lite, 30, 7.6, 3.5,
+      { rz: -Math.PI / 2 });
+    const muzzle = this.part(bg, new THREE.CylinderGeometry(15.8, 10.4, 13, 22), lite, 54, 0, 0,
+      { rz: -Math.PI / 2 });
+    this.outline(muzzle, 3.0);
+    const mring = this.part(bg, new THREE.TorusGeometry(14.8, 2.9, 10, 26), accent, 60.5, 0, 0,
+      { ry: Math.PI / 2 });
+    this.outline(mring, 2.2);
+    this.part(bg, new THREE.CylinderGeometry(11.4, 11.4, 2, 18), bore, 61, 0, 0,
+      { rz: -Math.PI / 2 });
+    return 62;
+  }
+
+  // Rear exhaust: gunmetal, tapered, angled ~30 degrees DOWN and back, capped
+  // with a soot ring and a black bore. Deliberately stripped of every barrel
+  // cue (no warm band, no flare, no muzzle ring) so the silhouette carries
+  // exactly one gun.
+  buildExhaust(g, x, y, len = 15, r0 = 5.6, r1 = 4.0, s = 1) {
+    const soot = this.toon('#2b3040');
+    const gunmetal = this.toon('#464f66');
+    const bore = this.flat('#0b0e17', false);
+    const ang = Math.PI / 2 + 0.52;              // back and 30 degrees down
+    const dx = -Math.sin(ang), dy = Math.cos(ang);
+    const pipe = this.part(g, new THREE.CylinderGeometry(r1 * s, r0 * s, len * s, 12), gunmetal,
+      x, y, 4, { rz: ang });
+    this.outline(pipe, 2.2);
+    const tx = x + dx * len * s * 0.5, ty = y + dy * len * s * 0.5;
+    const ring = this.part(g, new THREE.CylinderGeometry(r1 * s * 1.35, r1 * s * 1.35, 3.4 * s, 12),
+      soot, tx, ty, 4, { rz: ang });
+    this.outline(ring, 1.8);
+    this.part(g, new THREE.CylinderGeometry(r1 * s * 0.78, r1 * s * 0.78, 1.6, 12), bore,
+      tx + dx * 2.2, ty + dy * 2.2, 4, { rz: ang });
+  }
+
   // --- model -----------------------------------------------------------------
 
   buildModel() {
@@ -193,24 +426,28 @@ export class Mobile {
     this.outlines = [];
     this.recoilT = 0;
     this.phase = (this.x * 0.017) % (Math.PI * 2);
-    // Muzzle offsets (overridden per chassis in buildBoomer/buildRaider).
-    this.muzzleLen = 50;
-    this.muzzleY = 30;
+    const isRaider = this.typeKey === 'raider';
+    this.ink = isRaider ? '#25101a' : '#101a2e';
+    this.glintM = new THREE.MeshBasicMaterial({ color: '#ffffff' });
+    this.sinkY = isRaider ? -3.5 : -2.5;
 
     this.bodyGroup = new THREE.Group();
     this.group.add(this.bodyGroup);
 
-    // Soft blob shadow hugging the ground (does not bob with the body). Three
-    // stacked ellipses, faint+wide outside, darker in the core. Both the size
-    // and the alpha are re-weighted every frame against the camera distance
-    // (_updateGrounding) so the contact shadow survives the overview zoom
-    // instead of averaging away to nothing.
+    // Elliptical contact shadow hugging the ground (does not bob with the
+    // body). Parented to `group`, so the ground tilt squashes it to the local
+    // terrain slope for free. Three stacked ellipses fake a radial falloff:
+    // faint+wide outside, darker in the core. Both the size and the alpha are
+    // re-weighted every frame against the camera distance (_updateGrounding)
+    // so the contact shadow survives the overview zoom instead of averaging
+    // away to nothing.
     const shadow = new THREE.Group();
-    const isRaider = this.typeKey === 'raider';
-    this.shadowW = isRaider ? 48 : 46;   // ~1.6x the track footprint
-    this.shadowH = isRaider ? 14 : 13.5;
+    this.shadowW = isRaider ? 60 : 46;   // ~1.25x the track footprint half-width
+    this.shadowH = isRaider ? 16 : 14.5;
     this.shadowLayers = [];
-    [[1.0, 0.26], [0.72, 0.28], [0.44, 0.30]].forEach(([s, a], i) => {
+    // Five thin steps instead of three: the stack integrates to a smooth
+    // radial falloff (dense core, feathered rim) with no hard elliptical edge.
+    [[1.0, 0.11], [0.85, 0.12], [0.69, 0.13], [0.52, 0.15], [0.34, 0.16]].forEach(([s, a], i) => {
       const mat = new THREE.MeshBasicMaterial({
         color: '#0b1a1c', transparent: true, opacity: a, depthWrite: false,
       });
@@ -225,13 +462,17 @@ export class Mobile {
     // Sunk BELOW the contact line (the chassis occludes everything above it)
     // and nudged away from the sun so the pool that actually reaches the frame
     // is a wide dark smudge on the sod rather than a hairline under the treads.
-    shadow.position.set(isRaider ? -3 : -5, -5.5, -12);
+    shadow.position.set(isRaider ? -4 : -5, -5.5, -12);
     this.group.add(shadow);
     this.shadow = shadow;
 
     if (isRaider) this.buildRaider();
     else this.buildBoomer();
     this.buildGrassContact();
+
+    // muzzleLen/muzzleY kept as public fields (legacy readers); muzzleState()
+    // now derives from the aim joint itself so the shell leaves the bore.
+    this.muzzleY = this.pivotY + this.sinkY;
 
     // Flickering ember glow for the near-death state (hidden until hp < 25%).
     const ember = new THREE.Mesh(
@@ -242,8 +483,7 @@ export class Mobile {
       })
     );
     ember.scale.set(26, 26, 1);
-    ember.position.set(this.typeKey === 'raider' ? 0 : 0, this.typeKey === 'raider' ? 28 : 34,
-      this.typeKey === 'raider' ? 17 : 26);
+    ember.position.set(0, isRaider ? 46 : 52, 30);
     ember.visible = false;
     ember.renderOrder = 7; // above the terrain plane (renderOrder 5)
     this.bodyGroup.add(ember);
@@ -251,20 +491,20 @@ export class Mobile {
   }
 
   // Blades of sod poking up IN FRONT of the chassis silhouette at the contact
-  // line, so the treads read as pressed into the turf rather than parked on a
-  // painted backdrop. Parented to the group (not the bobbing bodyGroup) and
-  // pushed well forward in z so they always overlap the wheels.
+  // line, so the running gear reads as pressed into the turf rather than
+  // parked on a painted backdrop. Parented to the group (not the bobbing
+  // bodyGroup) and pushed well forward in z so they always overlap the wheels.
   buildGrassContact() {
     const isRaider = this.typeKey === 'raider';
     const g = new THREE.Group();
     // [x, height, width, tilt, z, color]
     const blades = isRaider
-      ? [[-30, 13, 3.0, 0.30, 30, '#4aa836'], [-19, 9, 2.4, -0.22, 32, '#69c94a'],
-         [-4, 15, 3.2, 0.16, 31, '#57bb3e'], [13, 10, 2.6, -0.30, 32, '#3f9634'],
-         [27, 14, 3.0, 0.24, 30, '#69c94a']]
-      : [[-28, 12, 2.9, 0.32, 30, '#4aa836'], [-16, 16, 3.2, -0.18, 32, '#69c94a'],
-         [-1, 10, 2.5, 0.22, 31, '#3f9634'], [12, 14, 3.0, -0.28, 32, '#57bb3e'],
-         [26, 11, 2.7, 0.20, 30, '#69c94a']];
+      ? [[-44, 12, 3.0, 0.30, 30, '#4aa836'], [-28, 9, 2.4, -0.22, 32, '#69c94a'],
+         [-11, 15, 3.2, 0.16, 31, '#57bb3e'], [8, 10, 2.6, -0.30, 32, '#3f9634'],
+         [26, 14, 3.0, 0.24, 30, '#69c94a'], [42, 10, 2.6, -0.18, 31, '#57bb3e']]
+      : [[-30, 12, 2.9, 0.32, 30, '#4aa836'], [-17, 16, 3.2, -0.18, 32, '#69c94a'],
+         [-2, 10, 2.5, 0.22, 31, '#3f9634'], [13, 14, 3.0, -0.28, 32, '#57bb3e'],
+         [28, 11, 2.7, 0.20, 30, '#69c94a']];
     for (const [x, hgt, wid, tilt, z, col] of blades) {
       const m = new THREE.Mesh(bladeGeo(), bladeMat(col));
       m.scale.set(wid, hgt, wid * 0.45);
@@ -278,287 +518,238 @@ export class Mobile {
     this.grass = g;
   }
 
-  // Boomer: chunky cyan turtle-tank with a real face. Silhouette-defining
-  // volumes only — two fat road wheels bumping out of the bottom edge, a
-  // rounded chassis, a domed shell with ONE riveted hatch breaking the top,
-  // a two-eyed face plate on the snout, a rear thruster, and a heavy tapered
-  // cannon with a flared brass-ringed muzzle.
+  // ==========================================================================
+  // BOOMER — the round one. 76 x 59 silhouette: one soft continuous blob with
+  // the face painted straight onto its front plate, two fat road wheels
+  // bumping out of the bottom edge, a shoulder cannon, and a stubby exhaust.
+  // ==========================================================================
   buildBoomer() {
     const g = this.bodyGroup;
-    const blue = this.toon(this.type.body);          // #3cc2ee shell
-    const blueDeep = this.toon('#17537f');           // hatch lid / deep shade
-    const blueMid = this.toon('#2a7cb4');            // chassis (lighter than the
-                                                     // running gear so the lower
-                                                     // half is not one dark mass)
-    const navy = this.toon(this.type.accent);        // #1d5f94 running gear
+    this.faceZ = faceZ(HULL_ROUND);
+    const cyan = this.toon(this.type.body);          // #3cc2ee shell
+    const cyanDeep = this.toon('#1c7fb2');           // shaded lower plate
+    const navy = this.toon(this.type.accent);        // #1d5f94
+    const navyDeep = this.toon('#123c63');           // brows / hatch
     const steel = this.toon('#9aa7bd');
-    const gunDark = this.toon('#333e5c');            // barrel tone 1
-    const gunMid = this.toon('#5a6b93');             // barrel tone 2
+    const gun = this.toon('#39415c');
+    const gunLite = this.toon('#616d92');
     const brass = this.toon('#f2a33a');              // the single warm accent
-    const bulb = new THREE.MeshBasicMaterial({ color: '#ffd23f' });
-    const glintM = new THREE.MeshBasicMaterial({ color: '#ffffff' });
-    const boreM = new THREE.MeshBasicMaterial({ color: '#0c0f18' });
-    // Constant-brightness materials for face + rim light so they always pop
-    // at game zoom regardless of scene lighting.
-    const faceM = new THREE.MeshBasicMaterial({ color: '#8fd0ec' });
-    const scleraM = new THREE.MeshBasicMaterial({ color: '#ffffff' });
-    const pupilM = new THREE.MeshBasicMaterial({ color: '#0f1a2e' });
+    const tire = this.toon('#232a44');
+    // Sclera is off-white on purpose: pure white sits above the bloom pass's
+    // luminance threshold and bleeds a halo over the pupil, greying it out.
+    const sclera = this.flat('#dce8f4');
+    const white = this.flat('#ffffff');
+    const inkM = this.flat('#0d1526');
+    const browM = this.flat('#16385c');
+    const gloss = this.flat('#a9e9ff');
+    const bulb = this.flat('#ffd23f', false);
 
-    this.muzzleLen = 54;
-    this.muzzleY = 34;
+    const CY = 45;   // hull centre height
+    const FZ = this.faceZ;
+    // --- running gear: two fat ROUND wheels (Raider gets treads) ---------
+    // Axle bar first, so the two wheels never read as detached circles.
+    const axle = this.part(g, new THREE.CapsuleGeometry(7.5, 26, 6, 12), navyDeep, 0, 15, 0,
+      { rz: Math.PI / 2, sz: 1.15 });
+    this.outline(axle, 2.6);
 
-    // --- running gear: two fat road wheels that BUMP OUT of the bottom of the
-    // silhouette (the old slipper-ellipses vanished into the hull outline) ---
-    const track = this.part(g, new THREE.CapsuleGeometry(9.5, 22, 6, 16), navy, -1, 12, 0,
-      { rz: Math.PI / 2, sx: 0.95, sz: 1.15 });
-    this.outline(track, 3.0);
-
-    const wheelGeo = new THREE.CylinderGeometry(11, 11, 14, 22);
-    const hubGeo = new THREE.CylinderGeometry(4.4, 4.4, 2.4, 14);
-    const boltGeo = new THREE.SphereGeometry(1.5, 8, 6);
-    for (const wx of [-18, 15]) {
-      const wheel = this.part(g, wheelGeo, gunDark, wx, 11, 2, { rx: Math.PI / 2 });
-      this.outline(wheel, 2.8);
-      const hub = this.part(g, hubGeo, steel, wx, 11, 10.2, { rx: Math.PI / 2 });
-      this.outline(hub, 1.6);
+    const wheelGeo = new THREE.CylinderGeometry(14.5, 14.5, 17, 26);
+    const hubGeo = new THREE.CylinderGeometry(6.4, 6.4, 3.4, 16);
+    const lugGeo = new THREE.BoxGeometry(3.4, 4.4, 18);
+    const boltGeo = new THREE.SphereGeometry(1.8, 8, 6);
+    for (const wx of [-20, 20]) {
+      const wheel = this.part(g, wheelGeo, tire, wx, 14.5, 2, { rx: Math.PI / 2 });
+      this.outline(wheel, 3.0);
+      // Tyre lugs around the rim: reads as rubber, and stops the two wheels
+      // merging into one dark bar under the hull.
+      for (let k = 0; k < 12; k++) {
+        const a = k * (Math.PI / 6);
+        this.part(g, lugGeo, navyDeep, wx + Math.cos(a) * 14.2, 14.5 + Math.sin(a) * 14.2, 2,
+          { rz: a });
+      }
+      const hub = this.part(g, hubGeo, steel, wx, 14.5, 10.5, { rx: Math.PI / 2 });
+      this.outline(hub, 1.8);
       for (let k = 0; k < 5; k++) {
         const a = k * (Math.PI * 2 / 5) + 0.4;
-        this.part(g, boltGeo, navy, wx + Math.cos(a) * 7.2, 11 + Math.sin(a) * 7.2, 10.6);
+        this.part(g, boltGeo, navy, wx + Math.cos(a) * 9.6, 14.5 + Math.sin(a) * 9.6, 11.8);
       }
     }
 
-    // --- chassis: rounded capsule, no hard-cut belt ends ---
-    const chassis = this.part(g, new THREE.CapsuleGeometry(10.5, 30, 6, 18), blueMid, -1, 24, 1,
-      { rz: Math.PI / 2, sx: 0.9, sz: 1.02 });
-    this.outline(chassis, 3.0);
+    // --- hull: ONE continuous rounded silhouette ------------------------
+    const hullGeo = slab(roundedShape([
+      [30, -4, 15], [24, 15, 15], [0, 22, 19], [-26, 11, 17],
+      [-30, -8, 13], [-22, -21, 8], [22, -21, 8],
+    ]), HULL_ROUND);
+    const hull = this.part(g, hullGeo, cyan, 0, CY, 0);
+    this.outline(hull, 3.6);
 
-    // --- shell dome ---
-    const shell = this.part(g, new THREE.SphereGeometry(26, 30, 22), blue, -3, 33, 0,
-      { sx: 1.1, sy: 0.86, sz: 1 });
-    this.outline(shell, 3.6);
+    // Cel shading painted on the front plate: a wide shaded belly band low
+    // down, a soft gloss streak up on the clean rear shoulder.
+    // The band runs wider than the flat plate on purpose: its ends spill onto
+    // the bevel so it reads as shading wrapping the volume, not a painted-on
+    // puddle floating in the middle of the body.
+    this.part(g, new THREE.SphereGeometry(1, 22, 12), cyanDeep, 1, CY - 20, FZ + 0.6,
+      { sx: 26, sy: 4.2, sz: 0.5 });
+    this.part(g, new THREE.SphereGeometry(1, 18, 12), gloss, -15, CY + 12, FZ + 1.0,
+      { sx: 8.8, sy: 4.0, sz: 0.5, rz: -0.5 });
 
-    // (No grazing rim-light crescents: sitting them on the silhouette edge
-    // sliced the dome outline into a serrated white fringe at game zoom. The
-    // toon gradient plus the uniform outline carry the sky separation.)
+    // --- FACE, painted directly on the hull's front plate ---------------
+    // No head sphere, no seam: a single silhouette stroke wraps everything.
+    this.eye(g, -1, CY + 3, {
+      w: 8.2, h: 8.6, sclera, pupil: inkM, pupilR: 5.0,
+      browCol: browM, browTilt: -0.16, browW: 13.5, browH: 4.2, browY: 9.8,
+    });
+    this.eye(g, 16, CY + 1, {
+      w: 8.2, h: 8.6, sclera, pupil: inkM, pupilR: 5.0,
+      browCol: browM, browTilt: -0.32, browW: 13.5, browH: 4.2, browY: 9.8,
+    });
+    // Open, confident grin: a filled half-disc with a tooth band along the top.
+    this.part(g, new THREE.CircleGeometry(9.0, 26, Math.PI, Math.PI), inkM, 8, CY - 8, FZ + 2.0);
+    this.part(g, new THREE.BoxGeometry(15.2, 2.6, 1), white, 8, CY - 9.2, FZ + 2.6);
 
-    // --- ONE asymmetric top feature: a riveted access hatch, rear-biased, so
-    // the dome is not a smooth gradient (replaces the three pointless dots) ---
-    const hatch = this.part(g, new THREE.CylinderGeometry(10.4, 9.2, 6, 22), navy, -13, 43, 18.5,
-      { rx: Math.PI / 2 });
-    this.outline(hatch, 2.6);
-    this.part(g, new THREE.CylinderGeometry(6.4, 6.4, 1.6, 16), blueDeep, -13, 43, 22.2,
-      { rx: Math.PI / 2 });
-    const rivetGeo = new THREE.SphereGeometry(1.9, 8, 6);
-    for (let k = 0; k < 5; k++) {
-      const a = k * (Math.PI * 2 / 5) + 0.3;
-      this.part(g, rivetGeo, steel, -13 + Math.cos(a) * 8.1, 43 + Math.sin(a) * 8.1, 21.9);
-    }
-    // Antenna with a glowing bobble, off the rear shoulder of the dome
-    this.part(g, new THREE.CylinderGeometry(1.9, 1.9, 15, 8), steel, -26.1, 54.7, 2, { rz: 0.28 });
-    this.part(g, new THREE.SphereGeometry(3.4, 10, 8), bulb, -28.2, 61.7, 2);
+    // Antenna with a glowing bobble, off the rear shoulder.
+    this.part(g, new THREE.CylinderGeometry(1.9, 1.9, 17, 8), steel, -25, CY + 30, 0, { rz: 0.30 });
+    const bob = this.part(g, new THREE.SphereGeometry(3.8, 12, 9), bulb, -27.5, CY + 38.5, 0);
+    this.outline(bob, 1.6);
 
-    // --- FACE: a snout carrying a camera-facing plate with TWO eyes, brows
-    // and a smile. One eye + one brow read as a monocle; two read as a
-    // creature at any zoom. ---
-    const head = this.part(g, new THREE.SphereGeometry(13.5, 20, 16), blue, 26, 21, 5,
-      { sx: 1.05, sy: 1.0, sz: 0.95 });
-    this.outline(head, 3.0);
-    const plate = this.part(g, new THREE.SphereGeometry(9.4, 18, 14), faceM, 27, 22, 16.2,
-      { sx: 1.02, sy: 0.92, sz: 0.34 });
-    this.outline(plate, 2.0);
+    // --- rear exhaust (NOT a second gun) --------------------------------
+    this.buildExhaust(g, -33, CY - 11, 17, 6.2, 4.4, 1);
 
-    const eyeGeo = new THREE.SphereGeometry(4.4, 14, 12);
-    const pupGeo = new THREE.SphereGeometry(2.9, 12, 10);
-    const glintGeo = new THREE.SphereGeometry(1.15, 8, 6);
-    const browGeo = new THREE.BoxGeometry(8.0, 2.6, 2.4);
-    const eyes = [[22.8, 23.6, 0.12], [31.4, 23.1, -0.12]];
-    for (const [ex, ey, tilt] of eyes) {
-      const e = this.part(g, eyeGeo, scleraM, ex, ey, 18.6, { sx: 1, sy: 1.08, sz: 0.5 });
-      this.outline(e, 1.7);
-      this.part(g, pupGeo, pupilM, ex + 0.9, ey - 0.3, 20.8, { sx: 1, sy: 1.12, sz: 0.5 });
-      this.part(g, glintGeo, glintM, ex + 1.9, ey + 1.8, 21.8);
-      const brow = this.part(g, browGeo, navy, ex + 0.2, ey + 6.2, 19.2, { rz: tilt });
-      this.outline(brow, 1.5);
-    }
-    // Smile (half-torus, opening up)
-    this.part(g, new THREE.TorusGeometry(4.8, 1.05, 8, 18, Math.PI), pupilM, 27.4, 16.4, 19.0,
-      { rz: Math.PI });
-
-    // --- rear thruster: a chunky rounded silhouette bump off the back. Capsule
-    // + flared bell, so it never terminates in the flat vertical cut the old
-    // slab arm did. ---
-    const pod = this.part(g, new THREE.CapsuleGeometry(7.4, 10, 6, 14), steel, -31, 25, 6,
-      { rz: Math.PI / 2 });
-    this.outline(pod, 2.4);
-    const bell = this.part(g, new THREE.CylinderGeometry(9.6, 7, 7, 16), brass, -41.5, 25, 6,
-      { rz: Math.PI / 2 });
-    this.outline(bell, 2.2);
-    this.part(g, new THREE.CylinderGeometry(7.4, 7.4, 1.4, 14), boreM, -44.4, 25, 6,
-      { rz: Math.PI / 2 });
-
-    // --- CANNON (barrelPivot is the aim joint; barrelGroup takes recoil) ---
-    // Heavy: base radius is ~0.20 of the chassis width so it reads as a mortar
-    // and not a chimney pipe. Two solid tones (dark tube, lighter flare) with
-    // brass as the only accent — no candy-cane banding.
-    this.barrelPivot = new THREE.Group();
-    this.barrelPivot.position.set(-2, 36, 0);
-    g.add(this.barrelPivot);
-    this.barrelGroup = new THREE.Group();
-    this.barrelPivot.add(this.barrelGroup);
-    const bg = this.barrelGroup;
-
-    const breech = this.part(bg, new THREE.SphereGeometry(12, 16, 12), gunDark, 0, 0, 0);
-    this.outline(breech, 2.8);
-    const barrel = this.part(bg, new THREE.CylinderGeometry(9.8, 11.6, 40, 20), gunDark, 20, 0, 0,
-      { rz: -Math.PI / 2 });
-    this.outline(barrel, 3.0);
-    // Brass recoil collar, far enough out along the tube to clear the dome so
-    // the warm accent actually reads
-    const collar = this.part(bg, new THREE.CylinderGeometry(12.4, 12.4, 5.5, 20), brass, 26, 0, 0,
-      { rz: -Math.PI / 2 });
-    this.outline(collar, 2.4);
-    // Low-contrast light catch along the top of the tube (reads as a cylinder
-    // highlight, not a stripe)
-    this.part(bg, new THREE.CylinderGeometry(1.9, 1.9, 22, 8), gunMid, 20, 7.2, 0,
-      { rz: -Math.PI / 2 });
-    // Flared muzzle: outer lip is 1.3x the tube radius, so the barrel ends in
-    // an unmistakable arrowhead
-    const muzzle = this.part(bg, new THREE.CylinderGeometry(15, 9.8, 11, 20), gunMid, 45.5, 0, 0,
-      { rz: -Math.PI / 2 });
-    this.outline(muzzle, 2.8);
-    const mring = this.part(bg, new THREE.TorusGeometry(13.8, 2.6, 10, 24), brass, 50.6, 0, 0,
-      { ry: Math.PI / 2 });
-    this.outline(mring, 2.0);
-    this.part(bg, new THREE.CylinderGeometry(10.6, 10.6, 1.8, 16), boreM, 51, 0, 0,
-      { rz: -Math.PI / 2 });
+    // --- cannon ----------------------------------------------------------
+    this.muzzleLen = this.buildCannon(-8, CY + 13, {
+      angular: false, tube: gun, accent: brass, lite: gunLite,
+    });
   }
 
-  // Raider: chunky rounded red brawler tank, built in the same language as the
-  // Boomer — rounded two-tone hull, dark rubber wheels, ONE riveted armour
-  // plate on the back, a pair of glowing amber eyes behind a visor bar under a
-  // heavy angry brow, twin exhaust stacks, and a heavy tapered cannon with a
-  // flared, ringed muzzle.
+  // ==========================================================================
+  // RAIDER — the angular one. 98 x 48 silhouette: a long, low, chamfered wedge
+  // with a heavy scowling brow ridge, narrow glowing slit eyes, a bared-fang
+  // grin, continuous treads, twin sooty stacks and a slab-sided gun.
+  // ==========================================================================
   buildRaider() {
     const g = this.bodyGroup;
+    this.faceZ = faceZ(HULL_HARD);
     const red = this.toon(this.type.body);
     const redDark = this.toon(this.type.accent);
-    const redLite = this.toon('#ff9d84');
-    const gun = this.toon('#3a4152');
-    const tire = this.toon('#2b3147');
-    const band = this.toon('#1f2436');
+    const redDeep = this.toon('#7b2a20');
+    const redLite = this.toon('#ff9078');
+    const gun = this.toon('#39404f');
+    const gunLite = this.toon('#5b6580');
+    const tread = this.toon('#191d2b');
+    const roller = this.toon('#39415c');
     const steel = this.toon('#98a2b8');
-    const visorM = new THREE.MeshBasicMaterial({ color: '#ffb547' });
-    const glintM = new THREE.MeshBasicMaterial({ color: '#ffffff' });
-    const boreM = new THREE.MeshBasicMaterial({ color: '#0c0f18' });
-    const hubM = new THREE.MeshBasicMaterial({ color: '#dde5f0' });
-    const barrelLiteM = new THREE.MeshBasicMaterial({ color: '#616c88' });
+    const amber = this.flat('#ffdf72');
+    const slit = this.flat('#2b0a10');
+    const fang = this.flat('#f6efdd');
+    const maw = this.flat('#190508');
 
-    // Track bands (near + far) — plain dark rounded slabs
-    const treadGeo = new THREE.CapsuleGeometry(8.5, 40, 6, 14);
-    const t1 = this.part(g, treadGeo, band, 0, 9, 6, { rz: Math.PI / 2 });
-    const t2 = this.part(g, treadGeo, band, 0, 9, -8, { rz: Math.PI / 2 });
-    this.outline(t1, 2.4); this.outline(t2, 2.4);
-    // Road wheels: big dark rubber discs with a small light hub dot each —
-    // filled dark circles, no light rings.
-    const wheelGeo = new THREE.CylinderGeometry(8.5, 8.5, 5, 18);
-    const hubGeo = new THREE.CylinderGeometry(2.7, 2.7, 1.5, 10);
-    for (const wx of [-16, 0, 16]) {
-      const wheel = this.part(g, wheelGeo, tire, wx, 9, 12, { rx: Math.PI / 2 });
-      this.outline(wheel, 2.0);
-      this.part(g, hubGeo, hubM, wx, 9, 15.2, { rx: Math.PI / 2 });
+    const CY = 40;   // hull centre height
+    const FZ = this.faceZ;
+
+    // --- treads: one continuous scowling track band ---------------------
+    const trackGeo = slab(roundedShape([
+      [38, 3, 8], [42, -5, 8], [34, -10, 4], [-34, -10, 4], [-42, -4, 9], [-38, 5, 9],
+    ]), TRACK);
+    const track = this.part(g, trackGeo, tread, -2, 13.5, 4);
+    this.outline(track, 2.8);
+    // Inner guide rail + road wheels + a bigger drive sprocket at the rear.
+    this.part(g, new THREE.BoxGeometry(70, 3.4, 3), roller, 0, 14.5, 4 + TRACK_FACE);
+    const rollGeo = new THREE.CylinderGeometry(5.2, 5.2, 4, 14);
+    const sprocketGeo = new THREE.CylinderGeometry(7.4, 7.4, 4, 16);
+    for (const wx of [-25, -8.5, 8, 24.5]) {
+      const w = this.part(g, rollGeo, roller, wx, 11, 4 + TRACK_FACE, { rx: Math.PI / 2 });
+      this.outline(w, 1.6);
+      this.part(g, new THREE.SphereGeometry(1.6, 8, 6), steel, wx, 11, 6 + TRACK_FACE);
+    }
+    for (const [wx, s] of [[-37, 1], [37, 0.92]]) {
+      const w = this.part(g, sprocketGeo, roller, wx, 12, 4 + TRACK_FACE,
+        { rx: Math.PI / 2, sx: s, sz: s });
+      this.outline(w, 1.8);
+      this.part(g, new THREE.SphereGeometry(2.1, 9, 7), steel, wx, 12, 6 + TRACK_FACE);
+    }
+    // Tread lugs along the ground run: short light bars, no outline, so at
+    // distance the band still collapses to one solid dark shape.
+    for (let k = -4; k <= 4; k++) {
+      this.part(g, new THREE.BoxGeometry(3.4, 4.6, 2), roller, k * 8.6, 2.6, 4 + TRACK_FACE - 1);
     }
 
-    // Darker-red belly fender riding over the wheels (the two-tone shade)
-    const fender = this.part(g, new THREE.CapsuleGeometry(7, 46, 6, 12), redDark, 0, 18.5, 6,
-      { rz: Math.PI / 2 });
-    this.outline(fender, 2.4);
+    // --- hull: a hard-chamfered charging WEDGE --------------------------
+    // Pointed prow, a BROW HORN cut straight into the outline above the eyes,
+    // then a long straight deck raking down to a low tail. Few points, big
+    // angle changes and a 4.5-unit chamfer: every crease survives, so as a
+    // pure black shape it is unmistakably not Boomer's circle.
+    const hullGeo = slab(roundedShape([
+      [44, -17, 2], [53, -1, 2], [41, 8, 1.5], [50, 22, 2],
+      [20, 22, 2], [-14, 12, 2], [-42, 10, 2], [-46, -17, 2],
+    ]), HULL_HARD);
+    const hull = this.part(g, hullGeo, red, -4, CY, 0);
+    this.outline(hull, 3.6);
 
-    // Rounded main hull: squashed red dome, same construction as Boomer's shell
-    const hull = this.part(g, new THREE.SphereGeometry(24, 28, 20), red, 0, 31, 0,
-      { sx: 1.42, sy: 0.7, sz: 0.95 });
-    this.outline(hull, 3.4);
+    // Cel shading on the front plate: dark jaw band low and forward, a hard
+    // light facet capping the brow horn.
+    this.part(g, new THREE.BoxGeometry(42, 8, 2), redDeep, 16, CY - 16, FZ + 0.6, { rz: -0.10 });
+    this.part(g, new THREE.BoxGeometry(26, 3.6, 2), redLite, 30, CY + 16, FZ + 0.6);
+    // Shadow the eyes: a dark bar tucked under the horn's leading underside.
+    this.part(g, new THREE.BoxGeometry(30, 5, 2), redDeep, 28, CY + 9, FZ + 0.6, { rz: -0.12 });
 
-    // ONE raised armour plate with rivets instead of scattered spots/crescents.
-    // (The old grazing rim-light crescents sliced the hull silhouette into a
-    // serrated white edge at game zoom.) A rounded slab sitting proud of the
-    // dome intersects it cleanly at any resolution.
-    const plate = this.part(g, new THREE.CapsuleGeometry(5, 18, 6, 14), redLite, -6, 40, 15,
-      { rz: Math.PI / 2, sx: 0.85, sz: 0.75 });
-    this.outline(plate, 2.2);
-    const rivetGeo = new THREE.SphereGeometry(1.7, 8, 6);
-    for (const rx of [-17, -6, 5]) this.part(g, rivetGeo, steel, rx, 42.6, 17.5);
-
-    // Cockpit up front with an ANGRY TWO-EYED face: wide dark visor bar with a
-    // pair of glowing amber eyes under one heavy tilted brow. A single eye
-    // reads as a monocle; a pair reads as a creature at any zoom. Every face
-    // layer must clear the surface in front of it or the dome swallows it.
-    const cockpit = this.part(g, new THREE.SphereGeometry(12, 18, 14), redDark, 20, 39, 5,
-      { sx: 1.15, sy: 0.9, sz: 0.95 });
-    this.outline(cockpit, 2.6);
-    const visor = this.part(g, new THREE.SphereGeometry(9, 16, 12), gun, 22, 41, 14,
-      { sx: 1.25, sy: 0.55, sz: 0.45 });
-    this.outline(visor, 1.8);
-    const eyeGeo = new THREE.SphereGeometry(3.3, 12, 10);
-    for (const [ex, ey] of [[17.4, 41.4], [26.6, 41.0]]) {
-      this.part(g, eyeGeo, visorM, ex, ey, 18.4, { sx: 1.05, sy: 1.0, sz: 0.5 });
-      this.part(g, new THREE.SphereGeometry(1.1, 8, 6), glintM, ex + 1.2, ey + 1.3, 20.4);
-    }
-    // Heavy angled brow over both eyes = angry
-    const brow = this.part(g, new THREE.BoxGeometry(15, 3.4, 2.6), gun, 21, 46, 15.5,
-      { rz: -0.26 });
-    this.outline(brow, 1.7);
-
-    // Twin exhaust stacks (leaning back) with rings and dark bores
-    for (const z of [6.5, -6.5]) {
-      const stack = this.part(g, new THREE.CylinderGeometry(4.0, 4.6, 12, 10), gun, -25, 45, z,
-        { rz: 0.16 });
-      this.outline(stack, 1.5);
-      this.part(g, new THREE.TorusGeometry(4.2, 1.2, 8, 14), steel, -25.9, 50.2, z,
-        { rx: Math.PI / 2, rz: 0.16 });
-      this.part(g, new THREE.CylinderGeometry(3.1, 3.1, 1.4, 10), boreM, -26.1, 51.1, z, { rz: 0.16 });
+    // Riveted armour plate on the back deck (Raider's answer to Boomer's hatch)
+    this.part(g, new THREE.BoxGeometry(26, 8, 3), redDark, -26, CY - 2, FZ + 0.9, { rz: 0.16 });
+    for (const rx of [-36, -26, -16]) {
+      this.part(g, new THREE.SphereGeometry(1.7, 8, 6), steel, rx, CY - 2 + (rx + 26) * 0.16,
+        FZ + 3.0);
     }
 
-    // Front bumper: a chunky rounded bar, not a floating spike
-    const bumper = this.part(g, new THREE.CapsuleGeometry(3.6, 7, 5, 10), steel, 33, 18.5, 6,
-      { rz: Math.PI / 2, sz: 1.4 });
-    this.outline(bumper, 2.0);
+    // --- FACE: same rig as Boomer, hostile settings ---------------------
+    // Narrow slit eyes with vertical predator pupils, set deep under the horn.
+    this.eye(g, 20, CY + 4, {
+      w: 7.2, h: 4.3, sclera: amber, pupil: slit, pupilW: 0.42, pupilR: 3.3, glint: 1.5,
+      browCol: slit, browTilt: -0.42, browW: 13, browH: 3.6, browY: 5.6,
+    });
+    this.eye(g, 34, CY - 0.5, {
+      w: 7.2, h: 4.3, sclera: amber, pupil: slit, pupilW: 0.42, pupilR: 3.3, glint: 1.5,
+      browCol: slit, browTilt: -0.56, browW: 13, browH: 3.6, browY: 5.6,
+    });
+    // Bared-fang grin: a dark maw band with interlocking teeth.
+    this.part(g, new THREE.BoxGeometry(34, 7.6, 2), maw, 24, CY - 10, FZ + 1.6, { rz: -0.20 });
+    const fangGeo = new THREE.ConeGeometry(2.5, 5.8, 4);
+    for (const fx of [9, 16, 23, 30, 37]) {
+      const fy = CY - 10 - (fx - 24) * 0.20 + 1.1;
+      this.part(g, fangGeo, fang, fx, fy, FZ + 2.4, { rz: Math.PI - 0.20, sz: 0.5 });
+    }
+    for (const fx of [12.5, 19.5, 26.5, 33.5] ) {
+      const fy = CY - 10 - (fx - 24) * 0.20 - 1.1;
+      this.part(g, fangGeo, fang, fx, fy, FZ + 2.4, { rz: -0.20, sz: 0.5 });
+    }
 
-    // Cannon: same silhouette language as Boomer's — heavy tapered coaxial
-    // tube (base radius ~0.2 of the hull width), dark-red recoil collar,
-    // flared muzzle with a bright ring and a dark bore. Pivot sits behind the
-    // cockpit so the tube never covers the face.
-    this.muzzleLen = 54;
-    this.muzzleY = 32;
-    this.barrelPivot = new THREE.Group();
-    this.barrelPivot.position.set(-8, 32, 0);
-    g.add(this.barrelPivot);
-    this.barrelGroup = new THREE.Group();
-    this.barrelPivot.add(this.barrelGroup);
-    const bg = this.barrelGroup;
+    // --- twin sooty exhaust stacks on the tail (clearly not guns) -------
+    const stackSoot = this.toon('#2b3040');
+    const stackBore = this.flat('#0b0e17', false);
+    // Staggered in x as well as z: the billboarded side view collapses depth,
+    // so two stacks at the same x would project onto each other as one.
+    for (const [sx, z, h] of [[-41, 9, 22], [-31, -9, 18]]) {
+      const stack = this.part(g, new THREE.CylinderGeometry(4.4, 5.6, h, 10), gun, sx, CY + 14, z,
+        { rz: 0.22 });
+      this.outline(stack, 1.8);
+      const cy2 = CY + 14 + h * 0.5;
+      const cx2 = sx - h * 0.5 * 0.218;
+      const cap = this.part(g, new THREE.CylinderGeometry(5.8, 5.8, 3.4, 12), stackSoot,
+        cx2 - 0.4, cy2 + 1.7, z, { rz: 0.22 });
+      this.outline(cap, 1.6);
+      this.part(g, new THREE.CylinderGeometry(3.8, 3.8, 1.4, 10), stackBore,
+        cx2 - 0.9, cy2 + 4.0, z, { rz: 0.22 });
+    }
 
-    const breech = this.part(bg, new THREE.SphereGeometry(11.5, 16, 12), gun, 0, 0, 0);
-    this.outline(breech, 2.8);
-    const barrel = this.part(bg, new THREE.CylinderGeometry(9.4, 11.2, 40, 20), gun, 21, 0, 0,
-      { rz: -Math.PI / 2 });
-    this.outline(barrel, 3.0);
-    const collar = this.part(bg, new THREE.CylinderGeometry(12.2, 12.2, 5.5, 20), redDark, 28, 0, 0,
-      { rz: -Math.PI / 2 });
-    this.outline(collar, 2.4);
-    this.part(bg, new THREE.CylinderGeometry(1.8, 1.8, 20, 8), barrelLiteM, 18, 7, 0,
-      { rz: -Math.PI / 2 });
-    const muzzle = this.part(bg, new THREE.CylinderGeometry(14.4, 9.4, 10.5, 20), redDark, 46, 0, 0,
-      { rz: -Math.PI / 2 });
-    this.outline(muzzle, 2.8);
-    const mring = this.part(bg, new THREE.TorusGeometry(13.3, 2.5, 10, 24), steel, 50.9, 0, 0,
-      { ry: Math.PI / 2 });
-    this.outline(mring, 2.0);
-    this.part(bg, new THREE.CylinderGeometry(10.2, 10.2, 1.8, 16), boreM, 51.3, 0, 0,
-      { rz: -Math.PI / 2 });
+    // --- cannon ----------------------------------------------------------
+    this.muzzleLen = this.buildCannon(-14, CY + 10, {
+      angular: true, tube: gun, accent: redDark, lite: gunLite,
+    });
   }
 
   // --- gameplay API (contract used by game.js / main.js) ---------------------
 
-  // Muzzle world position + fire direction (radians, world space).
+  // Muzzle world position + fire direction (radians, world space). The aim
+  // joint is offset from the mobile's ground point, so the offset is mirrored
+  // with facing and carried through the ground tilt before the barrel length
+  // is added — that keeps the shell leaving the visible bore at every angle.
   muzzleState() {
     const a = rad(this.aimAngle);
     const dir = new THREE.Vector2(Math.cos(a) * this.facing, Math.sin(a));
@@ -566,8 +757,10 @@ export class Mobile {
     const cos = Math.cos(tilt), sin = Math.sin(tilt);
     const rotated = new THREE.Vector2(dir.x * cos - dir.y * sin, dir.x * sin + dir.y * cos);
     const L = this.muzzleLen || 50;
-    const px = this.x + rotated.x * L;
-    const py = this.y + (this.muzzleY || 30) + rotated.y * L;
+    const ox = (this.pivotX || 0) * this.facing;
+    const oy = (this.pivotY !== undefined ? this.pivotY : (this.muzzleY || 30)) + (this.sinkY || 0);
+    const px = this.x + (ox * cos - oy * sin) + rotated.x * L;
+    const py = this.y + (ox * sin + oy * cos) + rotated.y * L;
     return { x: px, y: py, dir: rotated };
   }
 
@@ -604,7 +797,7 @@ export class Mobile {
   syncTransform() {
     // Chord across the whole track footprint (not the point derivative) so the
     // tread baseline follows the ground the mobile actually spans.
-    this.groundAngle = this.terrain.surfaceAngle(this.x, 20);
+    this.groundAngle = this.terrain.surfaceAngle(this.x, this.typeKey === 'raider' ? 30 : 22);
     this.group.position.set(this.x, this.y, 20);
     this.group.rotation.z = this.groundAngle;
     this.group.scale.x = this.facing;
@@ -648,11 +841,9 @@ export class Mobile {
     const kick = this.recoilT * this.recoilT;
 
     const breathe = Math.sin(t * 2.0 + this.phase);
-    // Base offset sinks the tracks into the grass fringe so the mobile reads
-    // planted on the ground instead of hovering above it. The raider sinks
-    // deeper so its (now larger) wheels overlap the grass line.
-    const sink = this.typeKey === 'raider' ? -4.5 : -2.5;
-    this.bodyGroup.position.y = sink + breathe * 0.9 - kick * 1.5;
+    // Base offset sinks the running gear into the grass fringe so the mobile
+    // reads planted on the ground instead of hovering above it.
+    this.bodyGroup.position.y = this.sinkY + breathe * 0.9 - kick * 1.5;
     this.bodyGroup.position.x = -kick * 5;
     this.bodyGroup.rotation.z = breathe * 0.012 + kick * 0.05;
 
@@ -694,7 +885,7 @@ export class Mobile {
   // Contact shadow weighting. At the overview zoom the mobile is only ~60px
   // wide, so a shadow tuned for the aim framing averages away to nothing —
   // both the footprint and the alpha therefore scale up as the camera pulls
-  // back (target: ~1.3x chassis width and ~0.35 alpha at overview).
+  // back (target: ~1.25x chassis width and ~0.35 alpha at overview).
   _updateGrounding(camDist) {
     const layers = this.shadowLayers;
     if (!layers) return;
@@ -720,7 +911,9 @@ export class Mobile {
   updateDamageLook() {
     const ratio = this.maxHp ? this.hp / this.maxHp : 0;
     const scorch = clamp((0.5 - ratio) * 2, 0, 1) * 0.75;
-    for (const e of this.tintable) e.mat.color.copy(e.orig).lerp(SCORCH, scorch);
+    for (const e of this.tintable) {
+      e.mat.color.copy(e.orig).lerp(SCORCH, scorch * (e.k === undefined ? 1 : e.k));
+    }
     if (this.ember) this.ember.visible = this.alive && ratio < 0.25;
   }
 }

@@ -39,6 +39,17 @@ const SAFE_GROUND_Y = 0.80;
 // of the view half-width.
 const EDGE_WINDOW = 0.16;
 const EDGE_PAD = 0.10;
+// Actor safe area. A mobile is the hero prop of this game: it must never be
+// sliced by a frame boundary in a settled shot. Both mobiles are kept at least
+// ACTOR_MARGIN of the viewport width in from either edge, and the rig dollies
+// out (never in) to make that true. Vertically the HUD strips own the top and
+// bottom bands, so the safe box is inset there too.
+const ACTOR_MARGIN = 0.13;       // fraction of viewport WIDTH, per side
+const ACTOR_MARGIN_TOP = 0.17;   // fraction of viewport HEIGHT (player plates)
+const ACTOR_MARGIN_BOT = 0.23;   // fraction of viewport HEIGHT (console)
+// Two-shot framing leans this far toward the story point (crater / focus)
+// before the safe-area clamp pulls it back to include both mobiles.
+const WIDE_ANCHOR_BIAS = 0.34;
 
 export class World {
   constructor(canvas) {
@@ -133,6 +144,71 @@ export class World {
     return x + dir * (bestU + pad);
   }
 
+  // Two-shot / turn-transition framing: hold every listed actor inside the
+  // safe area, dollying OUT when they cannot all fit at the current lens.
+  // Used for the aftermath beat and the hand-over to the next player, where a
+  // still frame is what the player (and a reviewer) actually looks at.
+  _frameWide(t, c) {
+    const actors = c.actors;
+    if (!actors || !actors.length) return false;
+    const tanH = Math.tan((this.camera.fov * Math.PI) / 360);
+    const aspect = this.camera.aspect || 16 / 9;
+    let lo = Infinity, hi = -Infinity, yLo = Infinity, yHi = -Infinity;
+    for (const a of actors) {
+      lo = Math.min(lo, a.x - a.hw);
+      hi = Math.max(hi, a.x + a.hw);
+      yLo = Math.min(yLo, a.y - 10);
+      yHi = Math.max(yHi, a.y + a.h);
+    }
+    // Lens wide enough that the whole actor band fits between the side margins.
+    const needHalfW = (hi - lo) / (2 * (1 - 2 * ACTOR_MARGIN));
+    const needHalfH = (yHi - yLo) / (2 * (1 - ACTOR_MARGIN_TOP - ACTOR_MARGIN_BOT));
+    const need = Math.max(needHalfW / (tanH * aspect), needHalfH / tanH);
+    // Never zoom IN here: the aftermath push-out is the director's call, this
+    // pass only widens far enough to keep the cast whole.
+    t.zoom = clamp(Math.max(t.zoom, need), 620, 1900);
+
+    const halfH = tanH * t.zoom;
+    const halfW = halfH * aspect;
+    const anchor = c.anchor || { x: (lo + hi) / 2, y: (yLo + yHi) / 2 };
+    // Lean toward the story point, then clamp back into the safe area.
+    let x = (lo + hi) / 2 * (1 - WIDE_ANCHOR_BIAS) + anchor.x * WIDE_ANCHOR_BIAS;
+    const mX = halfW * 2 * ACTOR_MARGIN;
+    const xMin = hi - halfW + mX, xMax = lo + halfW - mX;
+    t.x = xMin > xMax ? (xMin + xMax) / 2 : clamp(x, xMin, xMax);
+
+    let y = (yLo + yHi) / 2 * (1 - WIDE_ANCHOR_BIAS) + anchor.y * WIDE_ANCHOR_BIAS;
+    const yMin = yHi - halfH + halfH * 2 * ACTOR_MARGIN_TOP;
+    const yMax = yLo + halfH - halfH * 2 * ACTOR_MARGIN_BOT;
+    t.y = yMin > yMax ? (yMin + yMax) / 2 : clamp(y, yMin, yMax);
+    return true;
+  }
+
+  // Settled-frame guard: nudge `x` so no actor straddles a vertical frame
+  // boundary. Each offender is pushed to whichever side is cheaper — fully
+  // inside the margin, or fully out of shot — so a mobile is never amputated.
+  _avoidActorClip(x, halfW, actors) {
+    if (!actors || !actors.length) return x;
+    const m = halfW * 2 * ACTOR_MARGIN;
+    for (let pass = 0; pass < 2; pass++) {
+      let worst = 0;
+      for (const a of actors) {
+        for (const s of [-1, 1]) {
+          const edge = x + s * halfW;
+          const d = (a.x - edge) * s;   // >0: actor is outside the frame
+          if (d > a.hw || d < -m) continue;      // clear out / clear in
+          const outward = -s * (a.hw + 4 - d);   // slide the edge past the actor
+          const inward = s * (d + m);            // pull the actor inside the margin
+          const fix = Math.abs(outward) <= Math.abs(inward) ? outward : inward;
+          if (Math.abs(fix) > Math.abs(worst)) worst = fix;
+        }
+      }
+      if (!worst) break;
+      x += worst;
+    }
+    return x;
+  }
+
   // Clamp a {x, y, zoom} view so the frustum at z=0 stays inside the art.
   _clampView(v) {
     const tanH = Math.tan((this.camera.fov * Math.PI) / 360);
@@ -158,8 +234,12 @@ export class World {
     const c = this.compose;
     if (!c || !c.shooter) return;
     const t = this.target;
-    const { halfH, halfW } = this.viewHalfExtents(t.zoom);
+    let { halfH, halfW } = this.viewHalfExtents(t.zoom);
     const gy = c.shooter.groundY;
+
+    // Turn hand-over / aftermath: compose a two-shot that keeps the whole cast
+    // inside the safe area, dollying out if that is what it takes.
+    if (c.mode === 'wide' && this._frameWide(t, c)) return;
 
     if (c.mode === 'aim') {
       const dir = c.facing >= 0 ? 1 : -1;
@@ -171,6 +251,8 @@ export class World {
       const back = (c.shooter.x - (x - dir * halfW)) * dir; // dist to trailing edge
       const minBack = halfW * 2 * 0.13;
       if (back < minBack) x -= dir * (minBack - back);
+      // Last word: no mobile may sit half-in / half-out of the frame.
+      x = this._avoidActorClip(x, halfW, c.actors);
       t.x = x;
       t.y = gy + halfH * (2 * AIM_GROUND_Y - 1);
       return;
@@ -184,6 +266,9 @@ export class World {
       (c.shooter.x - (this.pos.x - halfW)) / 260,
       ((this.pos.x + halfW) - c.shooter.x) / 260,
     );
+    // Settled (non-flight) frames also get the no-slice guard; during flight
+    // the camera is chasing the shell and dragging it would read as a stutter.
+    if (c.settled) t.x = this._avoidActorClip(t.x, halfW, c.actors);
     const w = clamp(inset, 0, 1);
     if (w <= 0) return;
     const limit = gy + halfH * (2 * SAFE_GROUND_Y - 1);

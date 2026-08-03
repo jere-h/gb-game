@@ -86,17 +86,21 @@ const EASE = {
 // Sedimentary recipes. `spec` = fine speckle density, `grit` = pebble/gravel
 // density, `lam` = bedding lamination strength. Density is a property of the
 // LAYER, which is what makes the scatter statistically non-uniform.
+// EVERY bed stays inside one warm family (hue ~14-38 deg, saturation never
+// below ~35%). A cool or neutral-grey bed reads as asphalt against the vivid
+// cartoon palette, so the value-anchor bed is a deep UMBER rather than a slate.
 const ROCKS = {
-  silt:   { col: [206, 176, 124], spec: 0.55, grit: 0.00, lam: 0.55, rough: 0.25 },
-  sand:   { col: [186, 140, 82],  spec: 1.00, grit: 0.22, lam: 0.30, rough: 0.5 },
-  clay:   { col: [126, 84, 50],   spec: 0.22, grit: 0.00, lam: 0.12, rough: 0.15 },
-  shale:  { col: [84, 64, 48],    spec: 0.20, grit: 0.05, lam: 1.00, rough: 0.2 },
-  ochre:  { col: [180, 104, 48],  spec: 0.70, grit: 0.10, lam: 0.22, rough: 0.35 },
-  rust:   { col: [166, 82, 50],   spec: 0.5,  grit: 0.15, lam: 0.35, rough: 0.4 },
-  gravel: { col: [142, 110, 78],  spec: 0.65, grit: 1.00, lam: 0.00, rough: 0.8 },
-  basalt: { col: [72, 64, 62],    spec: 0.18, grit: 0.35, lam: 0.00, rough: 0.6 },
-  marl:   { col: [162, 136, 96],  spec: 0.45, grit: 0.05, lam: 0.7, rough: 0.3 },
-  green:  { col: [112, 116, 86],  spec: 0.35, grit: 0.08, lam: 0.6, rough: 0.3 },
+  silt:   { col: [212, 178, 126], spec: 0.55, grit: 0.00, lam: 0.55, rough: 0.25 },
+  sand:   { col: [190, 142, 84],  spec: 1.00, grit: 0.22, lam: 0.30, rough: 0.5 },
+  clay:   { col: [132, 88, 52],   spec: 0.22, grit: 0.00, lam: 0.12, rough: 0.15 },
+  shale:  { col: [104, 70, 44],   spec: 0.20, grit: 0.05, lam: 1.00, rough: 0.2 },
+  ochre:  { col: [188, 108, 50],  spec: 0.70, grit: 0.10, lam: 0.22, rough: 0.35 },
+  rust:   { col: [172, 84, 48],   spec: 0.5,  grit: 0.15, lam: 0.35, rough: 0.4 },
+  gravel: { col: [150, 114, 76],  spec: 0.65, grit: 1.00, lam: 0.00, rough: 0.8 },
+  // Darkest band in the deck — deep umber, ~61% sat at hue 23 deg.
+  umber:  { col: [84, 53, 33],    spec: 0.18, grit: 0.35, lam: 0.00, rough: 0.6 },
+  marl:   { col: [172, 142, 98],  spec: 0.45, grit: 0.05, lam: 0.7, rough: 0.3 },
+  olive:  { col: [140, 110, 66],  spec: 0.35, grit: 0.08, lam: 0.6, rough: 0.3 },
 };
 
 // --- painterly props ---------------------------------------------------------
@@ -113,7 +117,7 @@ function drawRock(ctx, x, y, r, rng, depthT = 0.5) {
   }
   // Warm earth-toned rock, tinted darker the deeper it sits in the strata so
   // it belongs to its band instead of floating on top of the gradient.
-  const shades = [[122, 99, 80], [138, 112, 88], [110, 88, 68], [147, 120, 92], [95, 74, 54]];
+  const shades = [[130, 100, 72], [146, 112, 80], [116, 86, 60], [156, 120, 86], [102, 76, 52]];
   const base = shades[(rng() * shades.length) | 0];
   const dk = clamp(0.25 + depthT * 0.55, 0, 1);
   ctx.beginPath();
@@ -141,34 +145,71 @@ function drawRock(ctx, x, y, r, rng, depthT = 0.5) {
   ctx.restore();
 }
 
-// Five pebble variants (round, flat sliver, 5/6/7-sided chips) tinted toward
-// the warm soil palette, each with a thin top highlight.
+// Eight ANGULAR pebble silhouettes (chips, wedges, slivers, blocks) rather than
+// three rounded blobs. Every stamp gets a full 0..2pi rotation, a non-uniform
+// 0.7-1.4 stretch across one axis, a lit top facet and a soft contact shadow,
+// so magnification finds a different rock each time instead of one repeated
+// stamp scaled three ways.
+const PEB_SIL = [
+  // Unit-radius outlines in polar form: [angle fraction, radius] pairs.
+  [[0.00, 1.00], [0.16, 0.72], [0.34, 0.94], [0.52, 0.66], [0.70, 0.98], [0.86, 0.70]],
+  [[0.00, 1.05], [0.22, 0.55], [0.46, 0.88], [0.62, 0.52], [0.80, 1.00]],
+  [[0.00, 0.92], [0.13, 0.98], [0.30, 0.60], [0.48, 0.95], [0.66, 0.58], [0.82, 0.90]],
+  [[0.02, 1.10], [0.25, 0.62], [0.50, 1.04], [0.75, 0.58]],
+  [[0.00, 0.80], [0.12, 1.05], [0.28, 0.78], [0.42, 1.02], [0.58, 0.72], [0.74, 0.96], [0.90, 0.68]],
+  [[0.05, 0.96], [0.20, 0.70], [0.38, 1.02], [0.56, 0.74], [0.72, 0.90], [0.88, 0.62]],
+  [[0.00, 1.02], [0.30, 0.88], [0.44, 0.54], [0.64, 0.92], [0.84, 0.60]],
+  [[0.00, 0.70], [0.18, 1.06], [0.36, 0.66], [0.54, 1.00], [0.72, 0.64], [0.88, 0.98]],
+];
+
 function drawPebble(ctx, x, y, r, rng) {
   const shades = [
-    [138, 106, 74], [110, 82, 58], [127, 96, 66], [98, 74, 52], [146, 114, 82],
+    [148, 112, 76], [116, 86, 58], [134, 100, 66], [102, 76, 50], [158, 122, 84],
+    [126, 92, 60], [142, 106, 70],
   ];
-  const variant = (rng() * 5) | 0;
-  const rot = rng() * Math.PI;
-  ctx.fillStyle = css(shades[(rng() * shades.length) | 0]);
-  ctx.beginPath();
-  if (variant === 0) {
-    ctx.ellipse(x, y, r, r * 0.75, rot, 0, Math.PI * 2);
-  } else if (variant === 1) {
-    ctx.ellipse(x, y, r * 1.3, r * 0.5, (rot - Math.PI / 2) * 0.25, 0, Math.PI * 2);
-  } else {
-    const n = 3 + variant; // 5, 6 or 7 sides
-    for (let i = 0; i < n; i++) {
-      const a = rot + (i / n) * Math.PI * 2;
-      const rr = r * (0.78 + rng() * 0.35);
-      const px = x + Math.cos(a) * rr;
-      const py = y + Math.sin(a) * rr * 0.8;
-      if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
-    }
+  const sil = PEB_SIL[(rng() * PEB_SIL.length) | 0];
+  const rot = rng() * Math.PI * 2;
+  const sx = 0.7 + rng() * 0.7;              // non-uniform stretch
+  const sy = 0.72 + rng() * 0.5;
+  const ca = Math.cos(rot), sa = Math.sin(rot);
+  const pts = sil.map(([f, rr]) => {
+    const a = f * Math.PI * 2;
+    const px = Math.cos(a) * rr * r * sx;
+    const py = Math.sin(a) * rr * r * sy;
+    return [x + px * ca - py * sa, y + px * sa + py * ca];
+  });
+  const trace = (dx, dy) => {
+    ctx.beginPath();
+    ctx.moveTo(pts[0][0] + dx, pts[0][1] + dy);
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0] + dx, pts[i][1] + dy);
     ctx.closePath();
-  }
+  };
+  // Contact shadow: the same silhouette nudged down-right, so the chip sits ON
+  // the soil instead of floating in it.
+  ctx.fillStyle = 'rgba(28,16,8,0.30)';
+  trace(0.9, 1.6);
   ctx.fill();
-  ctx.fillStyle = 'rgba(255,235,200,0.4)';
-  ctx.fillRect(x - r * 0.5, y - r * 0.55, Math.max(1, r), 1);
+  const base = shades[(rng() * shades.length) | 0];
+  ctx.fillStyle = css(base);
+  trace(0, 0);
+  ctx.fill();
+  // Lit top facet: clip to the chip, wash the upper-left half.
+  ctx.save();
+  trace(0, 0);
+  ctx.clip();
+  ctx.fillStyle = 'rgba(255,232,192,0.30)';
+  ctx.beginPath();
+  ctx.moveTo(x - r * 2, y - r * 2);
+  ctx.lineTo(x + r * 2, y - r * 2);
+  ctx.lineTo(x + r * 2, y - r * 0.15);
+  ctx.lineTo(x - r * 2, y + r * 0.35);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = 'rgba(34,18,8,0.22)';
+  ctx.beginPath();
+  ctx.ellipse(x + r * 0.35, y + r * 0.55, r * 1.2, r * 0.7, rot, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
 }
 
 // Filled, tapered, S-curving root polygon: cubic centerline with alternating
@@ -576,8 +617,10 @@ export class Terrain {
     for (let i = 0; i < nOut; i++) {
       const cx = 180 + rng() * (w - 360);
       if (Math.abs(cx - 480) < 230 || Math.abs(cx - 1920) < 230) continue;
-      const rw = 20 + rng() * 44;
-      const hgt = 18 + rng() * 34;
+      // Squat knobs only: height scales with width, so a narrow outcrop can
+      // never come out as a grass-capped needle.
+      const rw = 34 + rng() * 56;
+      const hgt = (14 + rng() * 26) * clamp(rw / 62, 0.55, 1.25);
       for (let x = Math.floor(cx - rw - 4); x <= Math.ceil(cx + rw + 4); x++) {
         if (x < 0 || x > w) continue;
         const t = Math.abs(x - cx) / rw;
@@ -646,9 +689,47 @@ export class Terrain {
       }
     }
 
-    // --- stage 4d: re-level the firing platforms, gentle final smooth ----
+    // --- stage 4c2: break the CAD silhouette -----------------------------
+    // Everything above works at the macro wavelength, so a mesa comes out as a
+    // symmetric trapezoid: flat top, near-straight flanks, one dead-horizontal
+    // shelf. Two fixes, applied to the FINISHED contour:
+    //   (a) a second octave at ~1/6 the macro wavelength and 11-17px amplitude,
+    //       so no edge stays a straight segment for more than a few dozen px;
+    //   (b) 2-4 asymmetric notches (one flank steeper than the other) bitten
+    //       out of the profile at random widths.
     for (let x = 0; x <= w; x++) {
-      if (flatW[x] > 0) H[x] += (flatY[x] - H[x]) * flatW[x] * 0.84;
+      const amp = 22 + 12 * nz(x / 520, 2100);
+      H[x] += (nz.fbm(x / 46, 2, 1900) - 0.5) * amp;
+      H[x] += (nz(x / 15, 2050) - 0.5) * 4.5;
+    }
+    const nNotch = 2 + ((rng() * 3) | 0);
+    for (let i = 0; i < nNotch; i++) {
+      const ncx = 200 + rng() * (w - 400);
+      if (Math.min(Math.abs(ncx - 480), Math.abs(ncx - 1920)) < 250) continue;
+      // Only bite into ground that is already fairly level. Carving a notch
+      // into a slope leaves the uphill lip standing as a needle.
+      const ni = Math.round(ncx);
+      if (Math.abs(H[ni + 46] - H[ni - 46]) > 42) continue;
+      const wL = 20 + rng() * 34;
+      const wR = wL * (rng() < 0.5 ? 0.45 + rng() * 0.4 : 1.4 + rng() * 1.5);
+      const dep = 12 + rng() * 22;
+      const px = 1.1 + rng() * 1.1;   // >1 keeps the bite rounded, not a saw cut
+      for (let x = Math.floor(ncx - wL); x <= Math.ceil(ncx + wR); x++) {
+        if (x < 0 || x > w) continue;
+        const t = x < ncx ? (ncx - x) / wL : (x - ncx) / wR;
+        if (t > 1) continue;
+        H[x] -= dep * Math.pow(1 - t, px);
+      }
+    }
+
+    // --- stage 4d: re-level the firing platforms, gentle final smooth ----
+    // Only the two SPAWN platforms are pulled fully back to level; mesa tops
+    // and terrace treads keep most of their break-up, so the map stops looking
+    // ruled.
+    for (let x = 0; x <= w; x++) {
+      if (flatW[x] <= 0) continue;
+      const spawn = Math.min(Math.abs(x - 480), Math.abs(x - 1920)) < 250;
+      H[x] += (flatY[x] - H[x]) * flatW[x] * (spawn ? 0.9 : 0.34);
     }
     const tmp = Float32Array.from(H);
     for (let x = 1; x < w; x++) {
@@ -661,6 +742,24 @@ export class Terrain {
     for (let x = 2; x < w - 1; x++) {
       const nb = Math.max(H[x - 2], H[x + 2]);
       if (H[x] > nb + 26) H[x] = nb + 26;
+    }
+    // Second, wider pass: anything narrower than ~16px that still stands 30px
+    // proud of both neighbours is a shark-fin, not a landform. (A real knob or
+    // plateau edge keeps its height 8px away and is untouched.)
+    for (let pass = 0; pass < 2; pass++) {
+      for (let x = 8; x < w - 8; x++) {
+        const nb = Math.max(H[x - 8], H[x + 8]);
+        if (H[x] > nb + 30) H[x] = nb + 30;
+      }
+    }
+    // Third pass at 18px reach: kills the grass-capped shark-fin hoodoos that
+    // the extra silhouette octave occasionally stacks on a cliff shoulder.
+    // Anything at least ~36px wide (every real landform here) is untouched.
+    for (let pass = 0; pass < 3; pass++) {
+      for (let x = 18; x < w - 18; x++) {
+        const nb = Math.max(H[x - 18], H[x + 18]);
+        if (H[x] > nb + 42) H[x] = nb + 42;
+      }
     }
     for (let x = 0; x <= w; x++) H[x] = clamp(H[x], 152, 668);
 
@@ -781,8 +880,8 @@ export class Terrain {
     for (let i = 0; i < 34 && depth < 1120; i++) {
       const dt = depth / 1040;
       const pool = dt < 0.24 ? ['silt', 'sand', 'marl', 'clay', 'sand', 'ochre']
-        : dt < 0.62 ? ['sand', 'ochre', 'clay', 'shale', 'marl', 'gravel', 'rust', 'green']
-          : ['gravel', 'shale', 'basalt', 'clay', 'gravel', 'ochre', 'rust'];
+        : dt < 0.62 ? ['sand', 'ochre', 'clay', 'shale', 'marl', 'gravel', 'rust', 'olive']
+          : ['gravel', 'shale', 'umber', 'clay', 'gravel', 'ochre', 'rust'];
       // Neighbouring beds must differ in tone, or the stack merges back into
       // one flat slab and the whole point of the layering is lost.
       const lum = (c) => c[0] * 0.3 + c[1] * 0.59 + c[2] * 0.11;
@@ -794,16 +893,25 @@ export class Terrain {
       prevName = name;
       const thin = rng() < 0.22;
       const th = thin ? 7 + rng() * 10 : 26 + rng() * 76;
-      // Three-ish unconformity wedges: the layer tapers to zero width, so the
-      // stack is not a uniform ruled deck.
-      const pinch = (!thin && rng() < 0.24)
-        ? { c: rng() * w, hw: 190 + rng() * 430, d: 0.82 + rng() * 0.18 }
+      // Unconformity wedges: the layer tapers all the way to zero (d up to 1),
+      // so the stack is not a uniform ruled deck. Nearly half the thick beds
+      // now pinch out somewhere along the map.
+      const pinch = (!thin && rng() < 0.42)
+        ? { c: rng() * w, hw: 190 + rng() * 430, d: 0.86 + rng() * 0.14 }
         : null;
-      layers.push({ name, th, pinch, jit: rng() - 0.5 });
+      // Per-bed thickness wobble: an independent low-frequency channel with its
+      // own wavelength swells and starves the bed +/-35% along x, so no band
+      // keeps a constant width across the map.
+      layers.push({
+        name, th, pinch, jit: rng() - 0.5,
+        wl: 210 + rng() * 460,
+        wo: 1400 + i * 29,
+        wp: rng() * 40,
+      });
       depth += th;
     }
 
-    const SS = 8;
+    const SS = 4;
     const M = Math.floor(w / SS) + 2;
     const nb = layers.length + 1;
     const B = new Float32Array(nb * M);
@@ -812,15 +920,22 @@ export class Terrain {
       let yy = STACK_TOP;
       for (let li = 0; li < nb; li++) {
         const k = li / nb;
+        // Macro fold + mid-scale wander + a fine ragged term. Without the last
+        // two the contact between two beds is a silky 2000px arc, which is
+        // exactly the "wood grain on a barrel" read.
         const fold = tilt * (x / w - 0.5)
           + A1 * (0.72 + 0.55 * k) * Math.sin(x / 430 + P1 + k * 0.8)
           + A2 * Math.sin(x / 137 + P2 + k * 2.1)
-          + (nz.fbm(x / 300, 3, 40 + li * 13) - 0.5) * 15;
+          + (nz.fbm(x / 300, 3, 40 + li * 13) - 0.5) * 15
+          + (nz.fbm(x / 46, 2, 1200 + li * 11) - 0.5) * 9
+          + (nz(x / 14, 1600 + li * 7) - 0.5) * 3.2;
         const fx = faultX + faultLean * k;
         B[li * M + s] = yy + fold + faultThrow * clamp((x - fx) / 4, 0, 1);
         if (li < layers.length) {
           const L = layers[li];
           let t = L.th;
+          // +/-35% low-frequency thickness swell, unique wavelength per bed.
+          t *= 0.65 + 0.7 * nz.fbm((x + L.wp * 17) / L.wl, 2, L.wo);
           if (L.pinch) {
             const u = clamp(1 - Math.abs(x - L.pinch.c) / L.pinch.hw, 0, 1);
             t *= 1 - smoothstep(u) * L.pinch.d;
@@ -868,33 +983,54 @@ export class Terrain {
       this.paintBedDetail(ctx, rng, li, R, bnd, dt);
       ctx.restore();
 
-      // Bedding plane: a wobbling dark seam on the bed's upper contact.
+      // Bedding plane. NOT one ruled line across the map — a broken chain of
+      // 40-190px strokes with ~30% dropout and per-stroke alpha, so the contact
+      // is implied rather than printed. A continuous seam at constant offset is
+      // what made the dirt read as wood grain on a barrel.
       ctx.save();
-      ctx.beginPath();
-      ctx.moveTo(-10, B[li * M]);
-      for (let s = 0; s < M; s++) {
-        const x = Math.min(w, s * SS);
-        ctx.lineTo(x, B[li * M + s] + (nz(x / 26, 600 + li * 7) - 0.5) * 2.4);
+      ctx.lineCap = 'round';
+      const baseA = 0.15 + 0.2 * R.lam;
+      let s = 0;
+      while (s < M - 1) {
+        const segS = Math.max(2, Math.round((5 + rng() * 19)));
+        const segE = Math.min(M - 1, s + segS);
+        if (rng() > 0.30 && segE - s >= 2) {
+          ctx.beginPath();
+          for (let q = s; q <= segE; q++) {
+            const x = Math.min(w, q * SS);
+            const y = B[li * M + q] + (nz(x / 26, 600 + li * 7) - 0.5) * 2.4;
+            if (q === s) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+          }
+          ctx.strokeStyle = `rgba(30,18,8,${(baseA * (0.45 + rng() * 0.85)).toFixed(3)})`;
+          ctx.lineWidth = (L.th < 20 ? 1 : 1.6) * (0.7 + rng() * 0.7);
+          ctx.stroke();
+        }
+        s = segE + (rng() < 0.5 ? 1 : 1 + ((rng() * 3) | 0));
       }
-      ctx.strokeStyle = `rgba(30,18,8,${(0.16 + 0.2 * R.lam).toFixed(3)})`;
-      ctx.lineWidth = L.th < 20 ? 1 : 1.6;
-      ctx.stroke();
       ctx.restore();
     }
 
     // Fault plane: a thin dark break slicing the whole stack, with the beds
     // already offset across it. One of the loudest "this is real rock" cues.
+    // Drawn as a broken, wandering chain of faint segments, NOT one continuous
+    // stroke: a 2px line running dead-straight from the skyline to the
+    // waterline reads as a scratch on the canvas, not as a rock feature. The
+    // real cue is the bed offset across it, which is baked into B above.
     ctx.save();
-    ctx.strokeStyle = 'rgba(26,15,7,0.5)';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    for (let li = 0; li <= nb - 1; li++) {
-      const k = li / nb;
-      const fx = faultX + faultLean * k + (nz(k * 7, 950) - 0.5) * 6;
-      const fy = STACK_TOP + (bnd(li, fx) - STACK_TOP);
-      if (li === 0) ctx.moveTo(fx, fy); else ctx.lineTo(fx, fy);
+    ctx.lineCap = 'round';
+    const fjit = (i) => (nz(i * 1.7, 950) - 0.5) * 26 + (nz(i * 5.3, 980) - 0.5) * 9;
+    for (let li = 0; li < nb - 1; li++) {
+      if (rng() < 0.34) continue;
+      const k0 = li / nb, k1 = (li + 1) / nb;
+      const fx0 = faultX + faultLean * k0 + fjit(li);
+      const fx1 = faultX + faultLean * k1 + fjit(li + 1);
+      ctx.strokeStyle = `rgba(30,17,8,${(0.10 + rng() * 0.17).toFixed(3)})`;
+      ctx.lineWidth = 0.9 + rng() * 1.3;
+      ctx.beginPath();
+      ctx.moveTo(fx0, bnd(li, fx0));
+      ctx.lineTo(fx1, bnd(li + 1, fx1));
+      ctx.stroke();
     }
-    ctx.stroke();
     ctx.restore();
 
     // ---------------- soil mantle ----------------
@@ -948,19 +1084,38 @@ export class Terrain {
     this.paintRockFaces(ctx, rng);
 
     // Large low-frequency colour pockets so the big dirt faces read as patched
-    // earth rather than one flat deck of bands.
-    for (let i = 0; i < 13; i++) {
+    // earth rather than one flat deck of bands. Both variants stay warm — the
+    // old cool violet pocket was the only cold note in the foreground.
+    for (let i = 0; i < 15; i++) {
       const x = rng() * w;
       const gy = h - hAt(x);
       const y = gy + 40 + rng() * Math.max(1, h - gy - 40);
       const r = 120 + rng() * 180;
       const warm = rng() > 0.45;
       const cg = ctx.createRadialGradient(x, y, 0, x, y, r);
-      cg.addColorStop(0, warm ? 'rgba(206,144,82,0.10)' : 'rgba(62,56,84,0.09)');
+      cg.addColorStop(0, warm ? 'rgba(216,152,86,0.11)' : 'rgba(126,66,38,0.10)');
       cg.addColorStop(1, 'rgba(0,0,0,0)');
       ctx.fillStyle = cg;
       ctx.beginPath();
       ctx.arc(x, y, r, 0, TAU);
+      ctx.fill();
+    }
+    // Three huge, very faint hue-shifted blotches (5-8% alpha, 280-520px) whose
+    // only job is to keep a big empty mid-tone dirt field from being FLAT. They
+    // sit under everything else and are barely nameable as shapes.
+    for (let i = 0; i < 3; i++) {
+      const x = 200 + rng() * (w - 400);
+      const gy = h - hAt(x);
+      const y = gy + 90 + rng() * Math.max(1, h - gy - 90);
+      const r = 280 + rng() * 240;
+      const k = rng();
+      const col = k < 0.34 ? '236,176,104' : k < 0.67 ? '178,96,54' : '150,120,72';
+      const cg = ctx.createRadialGradient(x, y, r * 0.15, x, y, r);
+      cg.addColorStop(0, `rgba(${col},${(0.05 + rng() * 0.03).toFixed(3)})`);
+      cg.addColorStop(1, `rgba(${col},0)`);
+      ctx.fillStyle = cg;
+      ctx.beginPath();
+      ctx.ellipse(x, y, r, r * (0.55 + rng() * 0.5), (rng() - 0.5) * 0.6, 0, TAU);
       ctx.fill();
     }
 
@@ -1006,6 +1161,50 @@ export class Terrain {
       ctx.fillStyle = ug;
       ctx.fillRect(cx - rx - 60, cy + 20, rx * 2 + 120, bottom - cy + 60);
 
+      // Chunky rock lobes hanging off the belly. Without them the underside is
+      // a smooth gradient with horizontal bedding running through it, which is
+      // exactly the silhouette of a wooden bowl.
+      const lobeN = 5 + ((rng() * 4) | 0);
+      for (let i = 0; i < lobeN; i++) {
+        const lx = cx + (rng() - 0.5) * rx * 1.75;
+        const ly = cy + 60 + rng() * (bottom - cy - 70);
+        const lr = 20 + rng() * 34;
+        ctx.save();
+        ctx.beginPath();
+        for (let q = 0; q <= 14; q++) {
+          const a = (q / 14) * TAU;
+          const rr = lr * (0.72 + 0.42 * nz(q * 3.7 + i * 11, 1750));
+          const px = lx + Math.cos(a) * rr;
+          const py = ly + Math.sin(a) * rr * (0.6 + rng() * 0.2);
+          if (q === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+        }
+        ctx.closePath();
+        ctx.clip();
+        ctx.fillStyle = `rgba(${112 + rng() * 30 | 0},${78 + rng() * 24 | 0},${50 + rng() * 18 | 0},0.5)`;
+        ctx.fillRect(lx - lr * 1.4, ly - lr, lr * 2.8, lr * 2.2);
+        ctx.fillStyle = 'rgba(255,226,180,0.13)';
+        ctx.beginPath();
+        ctx.ellipse(lx - lr * 0.2, ly - lr * 0.4, lr * 0.85, lr * 0.4, 0, 0, TAU);
+        ctx.fill();
+        ctx.fillStyle = 'rgba(24,14,8,0.28)';
+        ctx.beginPath();
+        ctx.ellipse(lx + lr * 0.25, ly + lr * 0.45, lr * 0.9, lr * 0.34, 0, 0, TAU);
+        ctx.fill();
+        ctx.restore();
+        // Short vertical splits, so the belly is broken stone not turned wood.
+        const nSplit = 2 + ((rng() * 3) | 0);
+        for (let q = 0; q < nSplit; q++) {
+          ctx.strokeStyle = `rgba(26,15,8,${(0.16 + rng() * 0.2).toFixed(2)})`;
+          ctx.lineWidth = 0.8 + rng() * 0.7;
+          ctx.beginPath();
+          const sxp = lx + (rng() - 0.5) * lr * 1.5;
+          const syp = ly - lr * (0.15 + rng() * 0.55);
+          ctx.moveTo(sxp, syp);
+          ctx.quadraticCurveTo(sxp + (rng() - 0.5) * 5, syp + 5 + rng() * 8,
+            sxp + (rng() - 0.5) * 9, syp + 7 + rng() * 20);
+          ctx.stroke();
+        }
+      }
       for (let i = 0; i < 12; i++) {
         drawRock(ctx, cx + (rng() - 0.5) * rx * 1.7, cy + 46 + rng() * (bottom - cy - 46), 6 + rng() * 12, rng);
       }
@@ -1040,20 +1239,41 @@ export class Terrain {
     // Low-frequency regional density: some stretches are clean, some gritty.
     const reg = (x) => nz(x / 300, 111 + li * 5);
 
-    // Bedding laminations: thin lines PARALLEL TO THE BED, not to the ground.
-    const nlam = Math.round(R.lam * thAvg / 7);
+    // Bedding laminations: SHORT BROKEN TICKS parallel to the bed, never long
+    // continuous strokes. A 1500px smooth arc across a dirt face reads as wood
+    // grain on a barrel; a 20-70px dash at 8-14% alpha with a couple of degrees
+    // of angle jitter and heavy dropout reads as soil.
+    const nlam = Math.round(R.lam * thAvg / 6);
     for (let k = 0; k < nlam; k++) {
-      const t = (k + 0.5 + (rng() - 0.5) * 0.6) / Math.max(1, nlam);
+      const t = (k + 0.5 + (rng() - 0.5) * 0.7) / Math.max(1, nlam);
       const jit = (rng() - 0.5) * 3;
-      ctx.beginPath();
-      const xs = rng() * w * 0.5, xe = xs + w * (0.25 + rng() * 0.75);
-      for (let x = xs; x <= xe; x += 12) {
-        const y = bnd(li, x) + (bnd(li + 1, x) - bnd(li, x)) * t + jit + (nz(x / 34, 300 + k) - 0.5) * 2;
-        if (x === xs) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      const light = rng() < 0.35;
+      // One "horizon" spawns a train of dashes over a bounded stretch, so the
+      // ticks group into a lamination without ever spanning the mass.
+      let x = rng() * w;
+      const runEnd = Math.min(w, x + 160 + rng() * 420);
+      const tilt = (rng() - 0.5) * 0.21;   // +/-6 degrees
+      while (x < runEnd) {
+        const dash = 20 + rng() * 50;
+        if (rng() > 0.40) {
+          const xe = Math.min(runEnd, x + dash);
+          const yAt = (xx) => bnd(li, xx) + (bnd(li + 1, xx) - bnd(li, xx)) * t
+            + jit + (nz(xx / 34, 300 + k) - 0.5) * 2;
+          const y0 = yAt(x);
+          ctx.beginPath();
+          ctx.moveTo(x, y0 - (xe - x) * 0.5 * tilt);
+          const midX = (x + xe) * 0.5;
+          ctx.quadraticCurveTo(midX, yAt(midX) + (rng() - 0.5) * 1.6,
+            xe, yAt(xe) + (xe - x) * 0.5 * tilt);
+          ctx.strokeStyle = light
+            ? `rgba(255,232,192,${(0.07 + rng() * 0.07).toFixed(3)})`
+            : `rgba(26,15,6,${(0.08 + rng() * 0.07).toFixed(3)})`;
+          ctx.lineWidth = 0.8 + rng() * 0.9;
+          ctx.lineCap = 'round';
+          ctx.stroke();
+        }
+        x += dash + 8 + rng() * 46;
       }
-      ctx.strokeStyle = rng() < 0.35 ? 'rgba(255,232,192,0.09)' : 'rgba(26,15,6,0.16)';
-      ctx.lineWidth = 0.8 + rng() * 0.8;
-      ctx.stroke();
     }
 
     // Mottling: broad soft patches of lighter / darker material so a thick bed
@@ -1105,18 +1325,48 @@ export class Terrain {
       ctx.fillRect(p[0], p[1], 1 + rng() * 2, 1 + rng() * 2);
     }
 
-    // Gravel: clustered pebble beds, only in beds whose recipe calls for it.
+    // Gravel. Placement is driven by a small set of PATCHES anchored to slope
+    // breaks, not by uniform random sampling: 3-6 gravel fields collect where
+    // the ground steepens (which is where scree actually gathers) and the
+    // plateau interiors are left nearly bare. Uniform density from a handful of
+    // stamps is the fastest way to read "noise() * stamp".
     if (R.grit > 0.02) {
-      const npock = Math.round(thAvg * w / 2600 * R.grit) + 1;
+      const nPatch = 3 + ((rng() * 4) | 0);
+      const patches = [];
+      for (let k = 0; k < nPatch; k++) {
+        // Best-of-5: favours columns with a real slope break under them.
+        let bx = 0, bs = -1;
+        for (let a = 0; a < 5; a++) {
+          const cx2 = rng() * w;
+          const sl = Math.abs(hAt(cx2 + 10) - hAt(cx2 - 10)) + reg(cx2) * 6;
+          if (sl > bs) { bs = sl; bx = cx2; }
+        }
+        patches.push({ x: bx, hw: 45 + rng() * 120 });
+      }
+      const npock = Math.round(thAvg * w / 2100 * R.grit) + 1;
       for (let k = 0; k < npock; k++) {
+        const P = patches[(rng() * patches.length) | 0];
+        // Gaussian-ish falloff from the patch centre: dense core, sparse skirt.
+        const u = (rng() + rng() + rng()) / 1.5 - 1;
+        const px = clamp(P.x + u * P.hw, 1, w - 1);
+        const y0 = bnd(li, px), y1 = bnd(li + 1, px);
+        if (y1 - y0 < 2.5) continue;
+        const py = y0 + rng() * (y1 - y0);
+        if (py < h - hAt(px) + 10 || py > h + 4) continue;
+        const cnt = 3 + ((rng() * 9 * R.grit) | 0);
+        for (let q = 0; q < cnt; q++) {
+          drawPebble(ctx, px + (rng() - 0.5) * 52, py + (rng() - 0.5) * 22,
+            1.4 + rng() * 3.8, rng);
+        }
+        if (rng() < 0.4) drawRock(ctx, px + (rng() - 0.5) * 30, py, 5 + rng() * 8, rng, dt);
+      }
+      // A thin dusting of true singles, only under steep ground.
+      for (let k = 0; k < 26; k++) {
         const p = pick();
         if (!p) continue;
-        if (rng() > 0.2 + reg(p[0]) * 1.5) continue;
-        const cnt = 3 + ((rng() * 8 * R.grit) | 0);
-        for (let q = 0; q < cnt; q++) {
-          drawPebble(ctx, p[0] + (rng() - 0.5) * 46, p[1] + (rng() - 0.5) * 20, 1.5 + rng() * 3.4, rng);
-        }
-        if (rng() < 0.35) drawRock(ctx, p[0] + (rng() - 0.5) * 30, p[1], 5 + rng() * 8, rng, dt);
+        const sl = Math.abs(hAt(p[0] + 10) - hAt(p[0] - 10)) / 20;
+        if (rng() > clamp(sl, 0, 1) * 0.8) continue;
+        drawPebble(ctx, p[0], p[1], 1.3 + rng() * 2.4, rng);
       }
     }
 
@@ -1183,8 +1433,9 @@ export class Terrain {
         };
         ctx.save();
         ctx.clip(pathOf(1));
-        // Weathered, slightly cooler and lighter than the buried rock.
-        ctx.fillStyle = 'rgba(150,136,118,0.16)';
+        // Weathered: sun-bleached and LIGHTER than the buried rock, but still
+        // warm — a grey rind on every steep face desaturated the whole map.
+        ctx.fillStyle = 'rgba(198,162,116,0.15)';
         ctx.fillRect(xa - dep - 4, 0, xb - xa + dep * 2 + 8, h);
         // Joints running WITH the face, plus cross joints splitting it.
         const nJ = Math.round((xb - xa) * 0.35) + 6;
@@ -1220,6 +1471,27 @@ export class Terrain {
           drawRock(ctx, px + ix * d, h - H[px | 0] + iy * d, 4 + rng() * 8, rng, 0.3);
         }
         ctx.restore();
+
+        // Scree fan at the FOOT of the face: broken rock spills away from the
+        // base of the wall and thins out with distance. This is the one place
+        // loose stone belongs, which is what makes the rest of the map reading
+        // bare feel deliberate.
+        const footRight = H[xb] < H[xa];
+        const fx = footRight ? xb : xa;
+        const dir = footRight ? 1 : -1;
+        const reach = 34 + rng() * 62;
+        const nScree = 18 + ((rng() * 26) | 0);
+        for (let k = 0; k < nScree; k++) {
+          const t = Math.pow(rng(), 1.7);              // dense near the wall
+          const sxp = clamp(fx + dir * t * reach, 1, w - 1);
+          const sy = h - H[sxp | 0] + 16 + rng() * 34 + t * 10;
+          if (sy > h - 6) continue;
+          drawPebble(ctx, sxp + (rng() - 0.5) * 6, sy, 1.4 + (1 - t) * 3.6 * rng() + 0.6, rng);
+        }
+        if (rng() < 0.7) {
+          drawRock(ctx, clamp(fx + dir * (8 + rng() * 26), 2, w - 2),
+            h - H[clamp(fx + dir * 14, 0, w) | 0] + 22 + rng() * 24, 5 + rng() * 9, rng, 0.35);
+        }
       }
       x = x2 + 1;
     }
@@ -1351,6 +1623,30 @@ export class Terrain {
       ctx.beginPath();
       ctx.ellipse(cx, by, r * (0.75 + h1 * 1.05), r * (0.35 + h2 * 0.6), (h1 - 0.5) * 1.4, 0, TAU);
       ctx.fill();
+      // Overhang tongue: every ~150px a lobe of sod hangs down past the seam,
+      // with a root or two trailing off its tip. This is what stops the green
+      // cap from reading as a constant-thickness extrusion of the contour.
+      if (h1 > 0.93 && d > 7 && sc < 0.4) {
+        const tl = 7 + h2 * 13;
+        const tw = 3 + h3 * 5;
+        ctx.fillStyle = css(mix(GRASS_DEEP, [30, 82, 34], h2), 0.9);
+        ctx.beginPath();
+        ctx.moveTo(cx - tw, t + d - 3);
+        ctx.quadraticCurveTo(cx - tw * 1.15, t + d + tl * 0.7, cx + (h3 - 0.5) * 4, t + d + tl);
+        ctx.quadraticCurveTo(cx + tw * 1.15, t + d + tl * 0.6, cx + tw, t + d - 3);
+        ctx.closePath();
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(60,42,26,0.6)';
+        ctx.lineWidth = 0.9;
+        for (let q = 0; q < 2; q++) {
+          const rx2 = cx + (this.hash01(k * 6.1 + q * 3.3) - 0.5) * tw * 1.6;
+          ctx.beginPath();
+          ctx.moveTo(rx2, t + d + tl * 0.85);
+          ctx.quadraticCurveTo(rx2 + (h2 - 0.5) * 6, t + d + tl + 4,
+            rx2 + (h3 - 0.5) * 8, t + d + tl + 6 + h1 * 6);
+          ctx.stroke();
+        }
+      }
       // Root hairs trailing from the sod into the soil (skip on rock).
       if (h2 > 0.72 && steep < 0.6 && sc < 0.4) {
         ctx.strokeStyle = 'rgba(74,52,32,0.5)';
@@ -1389,8 +1685,11 @@ export class Terrain {
     // Runs are collected over a WIDER window than the repaint range so the
     // slope at every painted column is computed from the same neighborhood
     // no matter how big the dirty range was — repaints stay seam-free.
-    const xa = clamp(x0 - SL, 0, w - 1);
-    const xb = clamp(x1 + SL, 0, w - 1);
+    // Window is 3*SL wider than the repaint range because the curvature term
+    // reaches 2*SL out; anything narrower would clamp differently on a partial
+    // repaint and leave a seam.
+    const xa = clamp(x0 - SL * 3, 0, w - 1);
+    const xb = clamp(x1 + SL * 3, 0, w - 1);
     const n = xb - xa + 1;
 
     // Solid runs per column: arrays of [top, bottom).
@@ -1440,12 +1739,22 @@ export class Terrain {
       }
     }
 
+    // Second derivative of the surface: negative in hollows (canvas y grows
+    // downward), positive over convex noses. Feeds the sod-thickness model so
+    // soil piles up in dips and washes off shoulders.
+    const curvAt = (col, top) => {
+      const l = slopeAt(col - SL, top), r = slopeAt(col + SL, top);
+      return clamp((r - l) / (2 * SL), -0.35, 0.35);
+    };
+
     // Sod columns.
     for (let x = x0; x <= x1; x++) {
       const list = runs[x - xa];
       for (let r = 0; r < list.length; r++) {
         const [top, bottom] = list[r];
-        this.paintGrassColumn(x, top, bottom, this.scorchAt(x, top), slopeAt(x, top), r === 0);
+        const sl = slopeAt(x, top);
+        this.paintGrassColumn(x, top, bottom, this.scorchAt(x, top), sl, r === 0,
+          r === 0 ? curvAt(x, top) : 0);
       }
     }
 
@@ -1549,9 +1858,16 @@ export class Terrain {
     // Segments are batched by (scorch bucket, sod-present) so a single stroke
     // can switch from green sod edge to bare rock edge where the sod dies out.
     const sodD = this._sodD;
+    // Width tier: a slow noise band quantised to 3 steps, so the ink line
+    // swells and tapers like a brush stroke (0.55x .. 1.45x) instead of running
+    // at one machine-constant weight all the way round the silhouette.
+    const wTier = (i) => {
+      const x = chn.x0 + i;
+      return Math.min(2, (this.noise3(x * 0.62 + 31) * 3) | 0);
+    };
     const bucketAt = (i) => {
       const x = clamp(chn.x0 + i, 0, this.w - 1);
-      return Math.min(4, (sc[i] * 5) | 0) + (sodD[x] > 3.2 ? 0 : 8);
+      return Math.min(4, (sc[i] * 5) | 0) + (sodD[x] > 3.2 ? 0 : 8) + wTier(i) * 16;
     };
     const strokeRuns = (dy, width, jAmt, colFn) => {
       let i = 0;
@@ -1564,8 +1880,10 @@ export class Terrain {
         for (let k = i + 1; k <= j; k++) {
           ctx.lineTo(chn.x0 + k, ys[k] + dy + jit(chn.x0 + k) * jAmt);
         }
-        ctx.strokeStyle = colFn((bucket & 7) / 4, bucket >= 8);
-        ctx.lineWidth = width;
+        const bare = (bucket & 8) !== 0;
+        ctx.strokeStyle = colFn((bucket & 7) / 4, bare);
+        // Thin the line hard on bare rock, where there is no sod lip to ink.
+        ctx.lineWidth = width * (0.55 + 0.45 * (bucket >> 4)) * (bare ? 0.55 : 1);
         ctx.stroke();
         i = j;
       }
@@ -1574,10 +1892,10 @@ export class Terrain {
     // Different jitter amounts make the gap between them breathe too. Where
     // the sod has thinned to nothing (cliffs) the under-edge switches to bare
     // rock, so no green ribbon runs down a vertical face.
-    strokeRuns(0.6, 3.4, 1.0, (s, b) => (b
-      ? 'rgba(74,62,48,0.85)'
+    strokeRuns(0.6, 3.1, 1.0, (s, b) => (b
+      ? 'rgba(84,66,48,0.8)'
       : css(mix([31, 107, 42], [44, 30, 18], s))));
-    strokeRuns(-1.9, 2.4, 0.55, (s, b) => css(mix([26, 34, 16], [10, 6, 4], s), b ? 0.8 : 0.95));
+    strokeRuns(-1.9, 2.2, 0.55, (s, b) => css(mix([26, 34, 16], [10, 6, 4], s), b ? 0.7 : 0.95));
 
     // Tufts. Placement is Poisson-ish with a clustering bias: 30px cells, most
     // of them empty, the occupied ones carrying a burst of 1-3 tufts. A tuft
@@ -1745,14 +2063,25 @@ export class Terrain {
   // Sod thickness at column x: thick on flats, thinning to nothing on cliffs
   // (grass cannot hold on rock), further modulated 0.55x-1.6x by noise so the
   // green band is never a constant-width offset ribbon.
-  grassDepth(x, slope) {
+  // Sod thickness at column x. Three multiplied terms:
+  //   base  — 8-17px carrier
+  //   thin  — dies to ~nothing past ~55 degrees (grass cannot hold on rock)
+  //   vary  — 0.5x-1.6x low-frequency swell so the ribbon is never a constant
+  //           extrusion of the contour
+  //   hollow— soil COLLECTS in concave stretches and washes off convex noses,
+  //           driven by the surface's second derivative
+  grassDepth(x, slope, curv = 0) {
     const st = clamp(Math.abs(slope || 0) / 1.15, 0, 1);
-    const thin = 1 - 0.9 * st * st;
-    const vary = 0.5 + 1.15 * this.noise3(x);
-    return (11 + 10 * this.noise1(x)) * thin * vary;
+    const thin = 1 - 0.97 * Math.pow(st, 1.5);
+    const vary = 0.5 + 1.1 * this.noise3(x);
+    const hollow = clamp(1 - curv * 3.2, 0.72, 1.42);
+    // Second, faster channel (~50 and ~200px) so the band also breathes over
+    // short stretches, not only across half the map.
+    const ripple = 0.78 + 0.44 * this.noise2(x * 1.35);
+    return (8 + 9 * this.noise1(x)) * thin * vary * hollow * ripple;
   }
 
-  paintGrassColumn(x, top, bottom, scorch, slope = 0, isTop = true) {
+  paintGrassColumn(x, top, bottom, scorch, slope = 0, isTop = true, curv = 0) {
     const { ctx, h } = this;
     const s = clamp(scorch || 0, 0, 1);
     const run = bottom - top;
@@ -1767,7 +2096,7 @@ export class Terrain {
     const n1 = this.noise1(x);
     const n2 = this.noise2(x);
     const j = n2 - 0.5;
-    const d0 = this.grassDepth(x, slope);
+    const d0 = this.grassDepth(x, slope, curv);
     if (isTop && this._sodD) this._sodD[x] = d0;
     // Bare rock: too steep (or too scoured) for sod. Just a dark weathered lip
     // so the silhouette still reads, and the strata below stay exposed.

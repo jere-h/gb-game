@@ -12,6 +12,13 @@ const PREVIEW_N = 64;        // integration samples along the aim-preview path
 const PV_DOTS = 56;          // max marching dots rendered along the path
 const PV_SPACING = 19;       // world units between dots (~19px at aim zoom)
 const PV_SPEED = 30;         // world units/sec the dots march along the arc
+// Guide-dot taper, muzzle -> far end. Sizes are the pearl's on-screen diameter
+// in CSS px; the sprite quad is wider than the pearl because it also carries
+// the drop shadow (see _dotTexture), hence DOT_QUAD.
+const DOT_PX0 = 8.5, DOT_PX1 = 4.0;
+const DOT_A0 = 0.95, DOT_A1 = 0.45;
+const DOT_QUAD = 1.6;
+const ARC_CAP_PX = 56;       // on-screen size of the gold arc terminator
 const FALL_SAFE = 120;       // free fall distance before damage kicks in
 const CHARGE_RATE = 58;      // power points per second while holding fire
 // Elevation trim accelerates while the key is held: a tap is a fine 10 deg/sec
@@ -28,6 +35,11 @@ const EDGE_STEP = 12;        // world units between silhouette samples
 // The FX director owns the camera for this long after an impact (punch-in and
 // aftermath dwell). The aim composition stays out of its way until then.
 const IMPACT_DWELL = 2.45;
+// Turn hand-over two-shot window, in seconds since the last impact. It starts
+// after the FX director's punch-in has resolved (so the blast frame keeps its
+// tight lens) and ends before the next player can be lining up a shot.
+const TWO_SHOT_IN = 0.72;
+const TWO_SHOT_OUT = 3.3;
 const MARKER_Z = 70;         // marker plane, in front of every play-field prop
 // On-screen width of the off-screen rival chevron, sized against the viewport
 // so it stays a readable badge on desktop without eating a phone's screen.
@@ -65,7 +77,7 @@ export class Game {
     this._aimInput = false;
     this._aimActiveT = 0;        // >0 while the player is actively lining up
     this._aimKey = null;
-    this._sinceImpact = IMPACT_DWELL; // no impact yet: aim framing is free
+    this._sinceImpact = 1e6; // no impact yet: aim framing is free, no hand-over beat
 
     // Open the match already lined up on the rival, the way a player would
     // leave the turret after their last shot.
@@ -234,6 +246,7 @@ export class Game {
       if (this.effects.waterSplash) this.effects.waterSplash(impact.x, 18);
       else this.effects.spawn({ x: impact.x, y: 20, count: 14, speed: 180, color: '#9ad4ff', life: 0.6, size: 20 });
       this.ui.banner('Splash!', 900);
+      this._sinceImpact = 0;   // the hand-over two-shot plays after a miss too
       this.state = 'resolving';
       this.resolveT = 0.9;
       return;
@@ -315,40 +328,60 @@ export class Game {
 
   // --- aim preview arc --------------------------------------------------------
 
-  _ensurePreview() {
-    if (this.previewLine) return;
-    // Dot sprite: white core with a dark navy outline so it reads on the sky,
-    // the brown dirt, and the blue mountains alike.
+  // Guide-dot sprite: a white pearl with a heavy navy rim AND a soft black
+  // drop shadow under it. The shadow is what makes the dot survive crossing a
+  // white cloud — a navy rim alone is only ~1px at the taper's small end and
+  // vanishes against bright art.
+  _dotTexture() {
     const c = document.createElement('canvas');
-    c.width = c.height = 64;
+    c.width = c.height = 128;
     const ctx = c.getContext('2d');
-    ctx.fillStyle = 'rgba(23, 36, 74, 0.95)';
-    ctx.beginPath(); ctx.arc(32, 32, 27, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = '#ffffff';
-    ctx.beginPath(); ctx.arc(32, 32, 20, 0, Math.PI * 2); ctx.fill();
+    const TAU = Math.PI * 2;
+    // Drop shadow, offset down-right, soft.
+    if ('filter' in ctx) ctx.filter = 'blur(4px)';
+    ctx.fillStyle = 'rgba(6, 10, 30, 0.46)';
+    ctx.beginPath(); ctx.arc(68, 72, 40, 0, TAU); ctx.fill();
+    if ('filter' in ctx) ctx.filter = 'none';
+    // Navy rim.
+    ctx.fillStyle = '#16224d';
+    ctx.beginPath(); ctx.arc(62, 60, 40, 0, TAU); ctx.fill();
+    // Pearl core with a hint of sky in the lower half so it never reads flat.
+    const g = ctx.createLinearGradient(0, 26, 0, 96);
+    g.addColorStop(0, '#ffffff');
+    g.addColorStop(1, '#d7e6ff');
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(62, 60, 29, 0, TAU); ctx.fill();
     const tex = new THREE.CanvasTexture(c);
     tex.colorSpace = THREE.SRGBColorSpace;
+    return tex;
+  }
+
+  _ensurePreview() {
+    if (this.previewLine) return;
+    const tex = this._dotTexture();
 
     const g = new THREE.BufferGeometry();
     this._pvDotPos = new Float32Array(PV_DOTS * 3);
     this._pvDotA = new Float32Array(PV_DOTS);
+    this._pvDotS = new Float32Array(PV_DOTS);
     g.setAttribute('position', new THREE.BufferAttribute(this._pvDotPos, 3));
     g.setAttribute('aAlpha', new THREE.BufferAttribute(this._pvDotA, 1));
+    g.setAttribute('aSize', new THREE.BufferAttribute(this._pvDotS, 1));
     g.setDrawRange(0, 0);
     this._pvMat = new THREE.ShaderMaterial({
       uniforms: {
         uTex: { value: tex },
         uScale: { value: 600 },  // px-per-world-unit projection factor (per-frame)
-        uSize: { value: 9.5 },   // dot diameter in world units (~9px on screen)
       },
       vertexShader: `
         attribute float aAlpha;
+        attribute float aSize;
         varying float vA;
-        uniform float uScale, uSize;
+        uniform float uScale;
         void main() {
           vA = aAlpha;
           vec4 mv = modelViewMatrix * vec4(position, 1.0);
-          gl_PointSize = uSize * uScale / -mv.z;
+          gl_PointSize = aSize * uScale / -mv.z;
           gl_Position = projectionMatrix * mv;
         }`,
       fragmentShader: `
@@ -378,7 +411,119 @@ export class Game {
 
   _hidePreview() {
     if (this.previewLine) this.previewLine.visible = false;
+    if (this.arcCap) this.arcCap.visible = false;
+    this._pvEnd = null;
+    this._pvClip = Infinity;
     this._pvKey = null;
+  }
+
+  // --- guide terminator ---------------------------------------------------------
+  // The preview only covers the opening third of the flight, so it has to STOP
+  // somewhere. Ending on a dot that simply gets fainter reads as a bug; a gold
+  // arrowhead reads as "the shell carries on this way". When the arc's end is
+  // off-frame the same arrowhead pins to the frame boundary and becomes an
+  // edge marker, so the guide never just walks out of shot.
+
+  _ensureArcCap() {
+    if (this.arcCap) return;
+    const c = document.createElement('canvas');
+    c.width = c.height = 128;
+    const g = c.getContext('2d');
+    const TAU = Math.PI * 2;
+    // Soft dark halo: the same trick as the dots, so the cap holds up on a
+    // white cloud as readily as on the sky.
+    if ('filter' in g) g.filter = 'blur(6px)';
+    g.fillStyle = 'rgba(6, 10, 30, 0.42)';
+    g.beginPath(); g.arc(64, 64, 44, 0, TAU); g.fill();
+    if ('filter' in g) g.filter = 'none';
+    // Arrowhead pointing +x at rotation 0.
+    const head = () => {
+      g.beginPath();
+      g.moveTo(112, 64); g.lineTo(58, 22); g.lineTo(70, 64); g.lineTo(58, 106);
+      g.closePath();
+    };
+    g.lineJoin = 'round';
+    g.lineCap = 'round';
+    head();
+    g.strokeStyle = '#101a44';
+    g.lineWidth = 17;
+    g.stroke();
+    const grad = g.createLinearGradient(0, 18, 0, 110);
+    grad.addColorStop(0, '#ffe9a8');
+    grad.addColorStop(0.5, '#ffd257');
+    grad.addColorStop(1, '#f0a92e');
+    head();
+    g.fillStyle = grad;
+    g.fill();
+    // Trailing tick: reads as motion, and separates the cap from the last dot.
+    g.beginPath();
+    g.moveTo(30, 40); g.lineTo(46, 64); g.lineTo(30, 88);
+    g.strokeStyle = '#101a44';
+    g.lineWidth = 15;
+    g.stroke();
+    g.strokeStyle = '#ffd257';
+    g.lineWidth = 7;
+    g.stroke();
+
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false });
+    this.arcCap = new THREE.Sprite(mat);
+    this.arcCap.renderOrder = 55;
+    this.arcCap.visible = false;
+    this.scene.add(this.arcCap);
+  }
+
+  _updateArcCap() {
+    const end = this._pvEnd;
+    const cam = this.camera;
+    if (!end || !cam || !this.previewLine || !this.previewLine.visible) {
+      if (this.arcCap) this.arcCap.visible = false;
+      return;
+    }
+    this._ensureArcCap();
+    const Z = 68;
+    const halfH = Math.tan((cam.fov * Math.PI) / 360) * (cam.position.z - Z);
+    const halfW = halfH * (cam.aspect || 16 / 9);
+    const perPx = (2 * halfH) / Math.max(1, innerHeight);
+    const size = perPx * ARC_CAP_PX;
+    // Safe box: clear of the frame edges, the wind compass / player plates at
+    // the top, and the console at the bottom.
+    const padX = size * 0.62;
+    const xMin = cam.position.x - halfW + padX;
+    const xMax = cam.position.x + halfW - padX;
+    const yMinR = cam.position.y - halfH + 2 * halfH * 0.16;
+    const yMaxR = cam.position.y + halfH - 2 * halfH * 0.155;
+    const yMin = Math.min(yMinR, yMaxR), yMax = Math.max(yMinR, yMaxR);
+
+    let cx = end.x, cy = end.y, ang = end.ang, clip = Infinity;
+    if (cx < xMin || cx > xMax || cy < yMin || cy > yMax) {
+      // The guide runs out of frame: walk BACK along the arc to the last
+      // sample still inside the safe box, so the marker sits ON the arc at the
+      // boundary instead of floating off its line.
+      const P = this._pvPath, C = this._pvCum;
+      let i = this._pvCount - 1;
+      while (i > 0) {
+        const px = P[i * 2], py = P[i * 2 + 1];
+        if (px >= xMin && px <= xMax && py >= yMin && py <= yMax) break;
+        i--;
+      }
+      if (i > 0) {
+        cx = P[i * 2]; cy = P[i * 2 + 1];
+        ang = Math.atan2(cy - P[(i - 1) * 2 + 1], cx - P[(i - 1) * 2]);
+        clip = C[i];
+      } else {
+        cx = clamp(cx, xMin, xMax);
+        cy = clamp(cy, yMin, yMax);
+      }
+    }
+    // Dots stop where the marker does — nothing of the guide reads as escaping
+    // past its own terminator.
+    this._pvClip = clip;
+    this.arcCap.material.rotation = ang;
+    this.arcCap.scale.set(size, size, 1);
+    this.arcCap.position.set(cx, cy, Z);
+    this.arcCap.visible = true;
   }
 
   // Arc covering roughly the first 30% of the flight path, drawn as marching
@@ -416,6 +561,16 @@ export class Game {
     this._pvCount = n;
     this._pvTotal = dist;
     this.previewLine.visible = n > 1;
+    // End of the guide: where it points and which way it is heading. The cap
+    // marker rides here (or on the frame edge when this is off-screen), so the
+    // arc always terminates in something deliberate instead of just stopping.
+    if (n > 1) {
+      const ex = P[(n - 1) * 2], ey = P[(n - 1) * 2 + 1];
+      const bx = P[(n - 2) * 2], by = P[(n - 2) * 2 + 1];
+      this._pvEnd = { x: ex, y: ey, ang: Math.atan2(ey - by, ex - bx) };
+    } else {
+      this._pvEnd = null;
+    }
   }
 
   // Per-frame: place the marching dots along the stored polyline. Dots scroll
@@ -428,27 +583,39 @@ export class Game {
     const pr = Math.min(devicePixelRatio, 2);
     this._pvMat.uniforms.uScale.value =
       (innerHeight * pr * 0.5) / Math.tan((this.camera.fov * Math.PI) / 360);
+    // World units per CSS pixel at the dots' own z plane, so the taper below is
+    // specified in real screen pixels and holds at any zoom.
+    const wpp = Math.tan((this.camera.fov * Math.PI) / 360)
+      * Math.max(1, this.camera.position.z - 30) / (innerHeight * 0.5);
     const P = this._pvPath, C = this._pvCum, n = this._pvCount, total = this._pvTotal;
-    const pos = this._pvDotPos, al = this._pvDotA;
+    const pos = this._pvDotPos, al = this._pvDotA, sz = this._pvDotS;
+    // The gold terminator may sit short of the arc's end (where it leaves the
+    // safe frame); dots stop there too. Taper still keys off the FULL length so
+    // the size/opacity ramp does not jump when the framing changes.
+    const limit = Math.min(total, this._pvClip ?? Infinity);
     let count = 0, seg = 1;
-    for (let d = this._pvPhase + 10; d <= total && count < PV_DOTS; d += PV_SPACING) {
+    for (let d = this._pvPhase + 10; d <= limit && count < PV_DOTS; d += PV_SPACING) {
       while (seg < n - 1 && C[seg] < d) seg++;
       const c0 = C[seg - 1], c1 = C[seg];
       const t = c1 > c0 ? clamp((d - c0) / (c1 - c0), 0, 1) : 0;
       pos[count * 3] = P[(seg - 1) * 2] + (P[seg * 2] - P[(seg - 1) * 2]) * t;
       pos[count * 3 + 1] = P[(seg - 1) * 2 + 1] + (P[seg * 2 + 1] - P[(seg - 1) * 2 + 1]) * t;
       pos[count * 3 + 2] = 30;
-      const f = total > 0 ? d / total : 0;
-      // Full alpha at the barrel easing to ~0.3 at the arc end, with a short
-      // ramp at both ends so marching dots never pop in or out.
-      const ends = Math.min(1, (d - 4) / PV_SPACING) * Math.min(1, (total - d) / PV_SPACING);
-      al[count] = (1 - 0.7 * f) * (0.35 + 0.65 * clamp(ends, 0, 1));
+      const f = total > 0 ? clamp(d / total, 0, 1) : 0;
+      // Taper: big and near-opaque at the muzzle, small and airy at the far
+      // end. That gradient is what tells the eye which way the shell is going
+      // and how far along the arc it is looking.
+      const ends = Math.min(1, (d - 4) / PV_SPACING) * Math.min(1, (limit - d) / (PV_SPACING * 0.7));
+      const fade = 0.4 + 0.6 * clamp(ends, 0, 1);
+      al[count] = (DOT_A0 + (DOT_A1 - DOT_A0) * f) * fade;
+      sz[count] = (DOT_PX0 + (DOT_PX1 - DOT_PX0) * f) * DOT_QUAD * wpp;
       count++;
     }
     const geo = this.previewLine.geometry;
     geo.setDrawRange(0, count);
     geo.attributes.position.needsUpdate = true;
     geo.attributes.aAlpha.needsUpdate = true;
+    geo.attributes.aSize.needsUpdate = true;
   }
 
   // --- camera composition -----------------------------------------------------
@@ -490,18 +657,46 @@ export class Game {
     return out;
   }
 
+  // Cast list for the camera's safe-area guard: every mobile still in the
+  // match, with the half-width / height of the space its art actually needs.
+  // The rig uses this to guarantee no mobile is ever sliced by a frame edge.
+  actorBoxes() {
+    const out = [];
+    for (const m of this.mobiles) {
+      if (!m.alive) continue;
+      out.push({ x: m.x, y: m.y, hw: (m.radius || 26) * 2.9, h: 122 });
+    }
+    return out;
+  }
+
   // Per-frame framing brief for the camera rig (see World.setComposition).
   composition() {
     const m = this.active;
     if (!m) return null;
     const shooter = { x: m.x, groundY: m.y };
+    const actors = this.actorBoxes();
+
+    // Turn hand-over beat. Once the impact punch-in has played out, the rig
+    // widens to a two-shot that holds the crater AND both mobiles clear of the
+    // frame edges — this is the still a player lingers on between turns, so
+    // nobody gets amputated in it. Releases back to normal framing before the
+    // next player starts aiming.
+    if (actors.length > 1
+      && this.state !== 'flying'
+      && this._sinceImpact > TWO_SHOT_IN
+      && this._sinceImpact < TWO_SHOT_OUT) {
+      return { mode: 'wide', shooter, actors, anchor: this.focus, settled: true };
+    }
+
     const aiming = (this.state === 'aim' || this.state === 'charging')
       && this._aimActiveT > 0
       && this._sinceImpact >= IMPACT_DWELL;
-    if (!aiming) return { mode: 'shot', shooter };
+    if (!aiming) return { mode: 'shot', shooter, actors, settled: this.state !== 'flying' };
     return {
       mode: 'aim',
       shooter,
+      actors,
+      settled: true,
       facing: m.facing,
       edges: this.silhouetteEdges(),
     };
@@ -592,8 +787,8 @@ export class Game {
   updateOverlays() {
     const m = this.active;
     const live = (this.state === 'aim' || this.state === 'charging') && m && !m.isAI;
-    if (live) this._updateTargetMarker();
-    else this._hideTargetMarker();
+    if (live) { this._updateTargetMarker(); this._updateArcCap(); }
+    else { this._hideTargetMarker(); if (this.arcCap) this.arcCap.visible = false; }
   }
 
   _updateTargetMarker() {

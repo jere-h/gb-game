@@ -2,7 +2,8 @@
 // readout, segmented power gauge, circular turn timer, HP cards, pop banners,
 // floating damage numbers. Pure CSS + small painted <canvas> portraits.
 
-const SEGS = 30; // power gauge segment count
+const SEGS = 30;      // power gauge segment count
+const MAX_WIND = 7;   // wind magnitude that maxes out the compass needle
 
 // Linear interpolate two #rrggbb colors -> 'rgb(...)'.
 function lerpColor(a, b, t) {
@@ -122,23 +123,26 @@ function paintItem(canvas, kind, px = 40) {
     g.strokeStyle = '#ffd75e'; g.lineWidth = 4.4 * u;
     chev(14); chev(24);
   } else {
-    // teleport: one bold circular arrow
+    // teleport: one bold circular arrow, drawn with the SAME hand as the dual
+    // chevrons — dark under-stroke then the coloured stroke, no solid fill, so
+    // the two adjacent slot tiles read as one illustration kit.
+    const ang = 1.9;
+    const head = (lw, col) => {
+      g.save();
+      g.translate(20 * u + Math.cos(ang) * 11 * u, 21 * u + Math.sin(ang) * 11 * u);
+      g.rotate(ang + Math.PI / 2);
+      g.strokeStyle = col; g.lineWidth = lw * u;
+      g.beginPath();
+      g.moveTo(-4.6 * u, -5.4 * u); g.lineTo(6.6 * u, 0); g.lineTo(-4.6 * u, 5.4 * u);
+      g.stroke();
+      g.restore();
+    };
     const arc = (lw, col) => {
       g.strokeStyle = col; g.lineWidth = lw * u;
       g.beginPath(); g.arc(20 * u, 21 * u, 11 * u, -2.5, 1.9); g.stroke();
     };
-    arc(9.2, '#0a0f22');
-    arc(4.8, '#8fe0ff');
-    const ang = 1.9;
-    g.save();
-    g.translate(20 * u + Math.cos(ang) * 11 * u, 21 * u + Math.sin(ang) * 11 * u);
-    g.rotate(ang + Math.PI / 2);
-    g.beginPath();
-    g.moveTo(7.5 * u, 0); g.lineTo(-4 * u, -6.2 * u); g.lineTo(-4 * u, 6.2 * u);
-    g.closePath();
-    g.strokeStyle = '#0a0f22'; g.lineWidth = 3.4 * u; g.stroke();
-    g.fillStyle = '#8fe0ff'; g.fill();
-    g.restore();
+    arc(8.4, '#0a0f22'); head(8.4, '#0a0f22');
+    arc(4.6, '#8fe0ff'); head(4.6, '#8fe0ff');
   }
 }
 
@@ -202,10 +206,13 @@ export class UI {
           transition: transform 0.45s cubic-bezier(.34,1.4,.64,1), opacity 0.3s;
           filter: drop-shadow(0 2px 3px rgba(0,0,0,0.7));
         }
-        /* static L / R axis letters: the dial now states which way is which */
+        /* static L / R axis letters, pinned to exact 9 and 3 o'clock and painted
+           in the HUD's own gold so they read as labels, not smudges */
         #hud .windSvg .wax {
-          font: 800 17px 'Baloo 2','Trebuchet MS',sans-serif;
-          fill: #9db2e4; opacity: 0.8;
+          font: 800 18px 'Baloo 2','Trebuchet MS',sans-serif;
+          fill: #ffe7a0; opacity: 0.78;
+          paint-order: stroke; stroke: #0b1026; stroke-width: 3.5px;
+          stroke-linejoin: round;
         }
         /* 0.8s ease pulse retriggered on every wind change */
         #hud .wind.pulse { animation: windPulse 0.8s cubic-bezier(.34,1.5,.64,1); }
@@ -265,37 +272,64 @@ export class UI {
           background: linear-gradient(rgba(255,255,255,0.26), rgba(255,255,255,0.02));
           pointer-events: none;
         }
+        /* The console absorbs ALL the slack: the wings hug their content (see
+           .wing) so the dock never opens 100px+ voids of bare navy, and the
+           width goes to the control that benefits from it — the power trough. */
         #hud .console {
-          position: relative; flex: 0 1 940px; min-width: 0;
-          padding: 9px 16px 11px;
+          position: relative; flex: 1 1 auto; min-width: 0;
+          padding: 9px 20px 11px;
         }
         /* rival-turn hand-off: the console visibly stands down. Per-control
            desaturation carries the state; a blanket alpha just looked unloaded. */
         #hud .dock.waiting { opacity: 0.94; }
+        /* grayscale, not saturate(): dropping saturation on gold lands on khaki,
+           which is the one hue that must never appear next to this navy. */
         #hud .dock.waiting .slot,
-        #hud .dock.waiting .shotBtn.on { filter: saturate(0.22) brightness(0.68); }
+        #hud .dock.waiting .shotBtn.on { filter: grayscale(0.88) brightness(0.62); }
         #hud .dock.waiting .angle { color: #6f7fa8; text-shadow: none; }
         #hud .dock.waiting .anglePrev { opacity: 0.3; }
         #hud .dock.waiting .seg.ghost { opacity: 0; }
         #hud .dock.waiting .powerLast.show { opacity: 0; }
         #hud .dock.waiting .idFrame, #hud .dock.waiting .lsv,
-        #hud .dock.waiting .wNum { filter: saturate(0.35) brightness(0.75); }
-        /* WAIT: DARKER than its surroundings, never the brightest thing on the
-           bar — but it keeps the bevel so it still reads as a moulded button. */
-        #hud .dock.waiting .fireBtn {
-          font-size: 13px; letter-spacing: 1.4px;
+        #hud .dock.waiting .wNum { filter: grayscale(0.8) brightness(0.7); }
+        /* ONE disabled look for the primary action, whether the shell is in the
+           air or the rival is up: cool navy, never brown, and it keeps the gold
+           ring, the inner bevel and the specular so it reads as a moulded
+           button standing down — not as a dead bulb. */
+        #hud .dock.waiting .fireBtn,
+        #hud .dock.firing .fireBtn {
           background: radial-gradient(circle at 50% 30%, #3a4472 0%, #232b4e 55%, #151a34 100%);
-          border-color: #0a0f22; color: #7f8cb5;
-          text-shadow: 0 1px 2px #000;
-          box-shadow: 0 0 0 3px #6b4a12, 0 0 0 5px #0a0f22,
-            inset 0 2px 0 rgba(255,255,255,0.16),
+          border-color: #0a0f22;
+          box-shadow: 0 0 0 3px #b9954a, 0 0 0 5px #4c3a10,
+            inset 0 2px 0 rgba(255,255,255,0.22),
             inset 0 -3px 0 rgba(0,0,0,0.7),
             inset 0 -9px 14px rgba(0,0,0,0.5),
             0 4px 10px rgba(0,0,0,0.5);
+          opacity: 0.88;
         }
-        #hud .dock.waiting .fireBtn::before { opacity: 0.22; }
-        /* shell in the air: the primary action is not available */
-        #hud .dock.firing .fireBtn { filter: brightness(0.5) saturate(0.55); }
+        #hud .dock.waiting .fireBtn .fLabel,
+        #hud .dock.firing .fireBtn .fLabel {
+          font-size: 13px; letter-spacing: 1.4px;
+          -webkit-text-fill-color: #8ea0cf; color: #8ea0cf;
+          filter: drop-shadow(0 1px 2px rgba(0,0,0,0.9));
+        }
+        #hud .dock.waiting .fireBtn::before,
+        #hud .dock.firing .fireBtn::before { opacity: 0.3; }
+        /* shell in the air: three pulsing gold dots so it reads BUSY, not dead */
+        #hud .fireBtn .fDots {
+          position: absolute; left: 0; right: 0; bottom: 19px;
+          display: none; justify-content: center; gap: 5px;
+        }
+        #hud .dock.firing .fireBtn .fDots { display: flex; }
+        #hud .fireBtn .fDots b {
+          width: 5px; height: 5px; border-radius: 50%; background: #ffd75e;
+          box-shadow: 0 0 5px rgba(255,215,94,0.8);
+          animation: fDot 0.9s ease-in-out infinite;
+        }
+        #hud .fireBtn .fDots b:nth-child(2) { animation-delay: 0.18s; }
+        #hud .fireBtn .fDots b:nth-child(3) { animation-delay: 0.36s; }
+        @keyframes fDot { 0%, 100% { opacity: 0.28; transform: scale(0.8); }
+          45% { opacity: 1; transform: scale(1.15); } }
         /* dark navy shelf under the dock (no orphan gold hairline) */
         #hud .baseboard {
           position: absolute; left: 0; right: 0; bottom: 0; height: 10px;
@@ -304,9 +338,9 @@ export class UI {
         }
         /* wing panels: borderless inner sections of the dock, split by a rule */
         #hud .wing {
-          position: relative; flex: 1 1 0; min-width: 0;
-          padding: 9px 18px 11px;
-          display: flex; align-items: flex-end; justify-content: space-between; gap: 12px;
+          position: relative; flex: 0 1 auto; min-width: 0;
+          padding: 9px 22px 11px;
+          display: flex; align-items: flex-end; justify-content: center; gap: 26px;
         }
         #hud .wing::after { /* the only separator: a 2px gold divider rule */
           content: ''; position: absolute; top: 8px; bottom: 8px; width: 2px;
@@ -426,17 +460,21 @@ export class UI {
         /* previous shot lives INSIDE the screen as a ghost, so the caption stays
            the word ANGLE and the live value stays the hero */
         #hud .anglePrev {
-          font-size: 11px; font-weight: 800; letter-spacing: 0.5px;
-          color: #5d6b95; text-shadow: none;
+          font-size: 11px; font-weight: 800; letter-spacing: 1px;
+          color: #7f8cb5; text-shadow: none;
           opacity: 0; transition: opacity 0.3s; white-space: nowrap;
         }
         #hud .anglePrev.show { opacity: 1; }
+        #hud .anglePrev i { color: var(--gold); font-style: normal; padding-right: 2px; }
 
         /* --- segmented power gauge --- */
         #hud .powerBox { flex: 1 1 auto; min-width: 0; align-self: flex-end; }
         #hud .powerBox .powerWrap { width: 100%; }
+        /* 42px tall: the primary skill input is now the HEAVIEST object on the
+           bar instead of the shortest, and its top edge lines up with the LED
+           screen and the portrait tile. */
         #hud .powerWrap {
-          position: relative; height: 30px; border-radius: 9px; padding: 3px;
+          position: relative; height: 42px; border-radius: 10px; padding: 3px;
           background: linear-gradient(#0a1230, #121a40 70%, #1a2a55);
           border: 2px solid #0a0f22;
           box-shadow:
@@ -473,10 +511,13 @@ export class UI {
           transition: background 0.05s;
           position: relative;
         }
-        /* previous shot: unmistakably a memory, never mistakable for a reading */
+        /* previous shot: an explicitly COLD slate-blue memory. Desaturating the
+           hot ramp produced a khaki-mud slab that fought the navy console and
+           could be misread as a half charge. */
         #hud .seg.ghost {
-          background: linear-gradient(var(--seg-hi), var(--seg) 55%, var(--seg-lo));
-          filter: saturate(0.35) brightness(0.34);
+          background: linear-gradient(rgba(126,158,255,0.34), rgba(58,80,166,0.20));
+          box-shadow: inset 0 1px 0 rgba(190,215,255,0.20);
+          filter: none;
           transition: opacity 0.3s;
         }
         #hud .seg.on {
@@ -509,25 +550,28 @@ export class UI {
           background: linear-gradient(rgba(255,255,255,0.30), rgba(255,255,255,0.02));
           border-radius: 6px 6px 0 0; pointer-events: none;
         }
-        /* scale numerals sit BELOW the trough, out of the fill and the handle */
-        #hud .powerScale {
-          display: flex; justify-content: space-between; width: 100%;
-          height: 12px; line-height: 12px; pointer-events: none;
-        }
-        #hud .powerScale span {
-          font-size: 9px; font-weight: 800; letter-spacing: 0.5px;
-          color: rgba(255,232,150,0.8); text-shadow: 0 1px 2px #000;
-        }
-        /* touch affordance: says out loud that power is a hold-and-release */
+        /* touch affordance: says out loud that power is a hold-and-release.
+           Opaque cream on a hard black shadow (~8:1), and above the tick layer
+           so a gold reference tick can never strike through a letter. */
         #hud .powerHint {
-          position: absolute; inset: 0; display: none;
+          position: absolute; inset: 0; z-index: 3; display: none;
           align-items: center; justify-content: center;
           font-size: 10px; font-weight: 800; letter-spacing: 0.13em;
-          color: rgba(255,231,160,0.85); text-shadow: 0 1px 2px #000;
+          color: #ffe9b0; text-shadow: 0 1px 2px #000, 0 0 6px rgba(0,0,10,0.95);
           pointer-events: none; animation: hintPulse 1.5s ease-in-out infinite;
         }
-        @keyframes hintPulse { 50% { opacity: 0.4; } }
+        @keyframes hintPulse { 50% { opacity: 0.55; } }
         #hud.touch .powerHint { display: flex; }
+        /* charging swaps the caption for the live value, in the same slot */
+        #hud .powerNum {
+          position: absolute; inset: 0; z-index: 3; display: none;
+          align-items: center; justify-content: center;
+          font-family: 'Baloo 2', 'Trebuchet MS', sans-serif;
+          font-size: 17px; font-weight: 800; letter-spacing: 0.5px;
+          color: #fff6d0; text-shadow: 0 2px 0 rgba(90,25,4,0.9), 0 0 10px rgba(0,0,10,0.9);
+          pointer-events: none;
+        }
+        #hud .powerWrap.charging .powerNum { display: flex; }
         #hud .powerWrap.charging .powerHint,
         #hud .dock.waiting .powerHint,
         #hud .dock.fired .powerHint { display: none; }
@@ -551,10 +595,12 @@ export class UI {
           transition: opacity 0.3s;
         }
         #hud .powerLast.show { opacity: 0.95; }
+        /* the flag sits fully ABOVE the trough's frame instead of half-buried
+           inside it */
         #hud .powerLast::before {
-          content: ''; position: absolute; top: -1px; left: 50%; transform: translateX(-50%);
-          border: 5px solid transparent; border-top: 6px solid #ffd75e;
-          filter: drop-shadow(0 1px 0 #101630);
+          content: ''; position: absolute; top: -11px; left: 50%; transform: translateX(-50%);
+          border: 5px solid transparent; border-top: 7px solid #ffd75e;
+          filter: drop-shadow(0 1px 0 #101630) drop-shadow(0 1px 2px rgba(0,0,10,0.8));
         }
 
         /* --- item slots (authentic console silhouette) --- */
@@ -578,8 +624,10 @@ export class UI {
           transform: rotate(-24deg);
           background: linear-gradient(rgba(255,255,255,0.16), rgba(255,255,255,0.01));
         }
-        #hud .slotKey { /* keycap plate OVERHANGING the frame, not eating it */
-          position: absolute; right: -4px; bottom: -4px; z-index: 2;
+        /* keycap plate overhangs the TOP corner: at the bottom it bottomed out
+           4px above the shared caption rail and crowded the ITEMS column */
+        #hud .slotKey {
+          position: absolute; right: -3px; top: -3px; z-index: 2;
           padding: 1px 4px; border-radius: 4px; line-height: 1;
           background: linear-gradient(#ffe9a0, #d59b1f);
           color: #402c05; font-size: 8px; font-weight: 800; letter-spacing: 0.5px;
@@ -602,10 +650,10 @@ export class UI {
           display: flex; align-items: center; justify-content: center;
         }
         #hud .timer {
-          font-size: 20px; font-weight: 800; color: #fff;
-          text-shadow: 0 0 6px rgba(120,170,255,0.7), 0 2px 2px #000;
+          font-size: 20px; font-weight: 800; color: #ffe7a0;
+          text-shadow: 0 0 7px rgba(255,190,60,0.55), 0 2px 2px #000;
         }
-        #hud .timerRing.rival .timer { color: #c8d4f2; }
+        #hud .timerRing.rival .timer { color: #b9c6ea; text-shadow: 0 2px 2px #000; }
         #hud .timerRing.low .timer { color: #ff6b5e; text-shadow: 0 0 8px rgba(255,60,40,0.9), 0 2px 2px #000; }
         #hud .timerRing.low { animation: hudPulse 0.6s ease-in-out infinite; }
         @keyframes hudPulse { 50% { transform: scale(1.08); } }
@@ -625,9 +673,22 @@ export class UI {
             inset 0 -10px 16px rgba(120,30,5,0.5),
             inset 0 9px 12px rgba(255,255,255,0.24),
             0 6px 16px rgba(0,0,0,0.6);
-          color: #fff8ef; font-weight: 800; font-size: 17px; letter-spacing: 1.4px;
-          text-shadow: 0 2px 0 rgba(120,25,5,0.95), 0 0 9px rgba(255,120,40,0.55);
+          font-weight: 800; letter-spacing: 0.6px;
           transition: filter 0.25s;
+        }
+        /* the label joins the gold display family (it was the only white type
+           in a gold console), sized to ~1/3 of the disc and nudged off the
+           specular so the highlight no longer washes the F and the I */
+        #hud .fireBtn .fLabel {
+          position: relative; z-index: 2; transform: translateY(2px);
+          font-size: 23px; line-height: 1;
+          background: linear-gradient(180deg, #fff6d0 0%, #ffd75e 55%, #e8a01f 100%);
+          -webkit-background-clip: text; background-clip: text;
+          color: transparent; -webkit-text-fill-color: transparent;
+          filter:
+            drop-shadow(1px 0 0 #5a1608) drop-shadow(-1px 0 0 #5a1608)
+            drop-shadow(0 1px 0 #5a1608) drop-shadow(0 -1px 0 #5a1608)
+            drop-shadow(0 2px 2px rgba(70,14,2,0.75));
         }
         #hud .fireBtn::before { /* specular gloss ellipse across the top third */
           content: ''; position: absolute; left: 12%; right: 12%; top: 5%; height: 38%;
@@ -644,8 +705,8 @@ export class UI {
             inset 0 3px 7px rgba(90,20,4,0.6),
             inset 0 -1px 0 rgba(120,25,5,0.9), 0 2px 5px rgba(0,0,0,0.5);
         }
-        #hud .fireBtn:active > span, #hud .fireBtn.held > span {
-          transform: translateY(2px); display: inline-block;
+        #hud .fireBtn:active .fLabel, #hud .fireBtn.held .fLabel {
+          transform: translateY(4px);
         }
 
         /* ============ player cards ============ */
@@ -660,11 +721,13 @@ export class UI {
             inset 0 -6px 10px rgba(0,0,0,0.35), 0 5px 14px rgba(0,0,0,0.55);
           transition: opacity 0.4s, filter 0.4s, box-shadow 0.4s;
         }
-        /* active-turn glow: soft blue for you, warning red for the rival */
+        /* active-turn glow: the house gold for you, warning red for the rival —
+           ONE highlight language, two tints (the old cyan ring read as a
+           browser focus outline). */
         #hud .pcard.activeYou {
           box-shadow: 0 0 0 2px #6b4a12, inset 0 1px 0 rgba(255,255,255,0.3),
             inset 0 -6px 10px rgba(0,0,0,0.35), 0 5px 14px rgba(0,0,0,0.55),
-            0 0 16px 3px rgba(89,193,255,0.65);
+            0 0 16px 3px rgba(255,215,94,0.5);
         }
         #hud .pcard.activeRival {
           box-shadow: 0 0 0 2px #6b4a12, inset 0 1px 0 rgba(255,255,255,0.3),
@@ -677,19 +740,20 @@ export class UI {
           border: 2px solid transparent; pointer-events: none;
           opacity: 0; transition: opacity 0.35s;
         }
-        /* Near-white ring backed by a dark keyline so it still reads when the
-           card sits against open blue sky. */
+        /* Same geometry both sides, backed by a dark keyline so it still reads
+           against open blue sky. Gold = you, red = rival. */
         #hud .pcard.activeYou::after {
-          opacity: 1; border-color: rgba(236,252,255,0.98);
+          opacity: 1; border-color: #e8b64a;
           box-shadow: 0 0 0 2px rgba(8,16,44,0.8),
-            0 0 20px 6px rgba(120,232,255,0.9),
-            inset 0 0 14px rgba(150,235,255,0.5);
+            0 0 18px 5px rgba(255,215,94,0.6),
+            inset 0 0 14px rgba(255,215,94,0.35);
           animation: cardPulse 1.7s ease-in-out infinite;
         }
         #hud .pcard.activeRival::after {
-          opacity: 1; border-color: rgba(255,160,140,0.95);
-          box-shadow: 0 0 18px 5px rgba(255,91,77,0.75),
-            inset 0 0 14px rgba(255,91,77,0.4);
+          opacity: 1; border-color: #ff6b5e;
+          box-shadow: 0 0 0 2px rgba(8,16,44,0.8),
+            0 0 18px 5px rgba(255,91,77,0.6),
+            inset 0 0 14px rgba(255,91,77,0.35);
           animation: cardPulse 1.7s ease-in-out infinite;
         }
         @keyframes cardPulse { 50% { opacity: 0.7; } }
@@ -736,11 +800,13 @@ export class UI {
           text-shadow: 0 1px 0 #000, 0 0 6px rgba(0,0,0,0.7);
         }
         #hud .hpmax { font-size: 10px; font-weight: 800; color: #8fa6dd; text-shadow: 0 1px 0 #000; }
+        /* A real trough with real weight: the most important readout in an
+           artillery game was a 10px sliver inside a 68px card. */
         #hud .hpbar {
-          position: relative; height: 14px; border-radius: 6px; margin-top: 5px;
-          background: linear-gradient(#080d1e, #101a3a);
+          position: relative; height: 20px; border-radius: 7px; margin-top: 5px;
+          background: linear-gradient(#0a0f26, #131b40);
           border: 2px solid #0a0f22;
-          box-shadow: inset 0 3px 5px rgba(0,0,0,0.85), 0 1px 0 rgba(255,255,255,0.18);
+          box-shadow: inset 0 3px 7px rgba(0,0,0,0.85), 0 1px 0 rgba(255,255,255,0.2);
           overflow: hidden;
         }
         #hud .hptrail {
@@ -758,18 +824,27 @@ export class UI {
         }
         #hud .hpfill.mid { background: linear-gradient(#fff0b0, #ffd75e 45%, #d59b1f 90%); }
         #hud .hpfill.crit { background: linear-gradient(#ffb3a8, #ff5b4d 45%, #c22619 90%); }
-        /* embossed 10-HP cell dividers over the fill (paired dark+light 1px) */
-        #hud .hpticks {
-          position: absolute; top: 1px; bottom: 1px; left: 0; right: 0;
+        /* rounded leading end-cap on the fill, so a partial bar reads as a
+           chunky bead rather than as a cut-off stripe */
+        #hud .hpfill::after {
+          content: ''; position: absolute; right: 0; top: 0; bottom: 0; width: 7px;
+          border-radius: 0 5px 5px 0;
+          background: linear-gradient(90deg, rgba(255,255,255,0), rgba(255,255,255,0.5));
           pointer-events: none;
-          background: repeating-linear-gradient(90deg,
-            transparent 0 calc(10% - 2px),
-            rgba(5,9,22,0.55) calc(10% - 2px) calc(10% - 1px),
-            rgba(255,255,255,0.28) calc(10% - 1px) 10%);
+        }
+        /* 6 chunky skewed cells, the same art kit as the power gauge's .seg —
+           the old 1px hairlines read as compression noise at 1600x900. */
+        #hud .hpticks {
+          position: absolute; top: 0; bottom: 0; left: 0; right: 0;
+          pointer-events: none;
+          background: repeating-linear-gradient(100deg,
+            transparent 0 calc(16.6667% - 3px),
+            rgba(5,9,22,0.92) calc(16.6667% - 3px) calc(16.6667% - 1px),
+            rgba(190,215,255,0.30) calc(16.6667% - 1px) 16.6667%);
         }
         #hud .hpbar .sheen {
-          position: absolute; left: 1px; right: 1px; top: 1px; height: 38%;
-          background: linear-gradient(rgba(255,255,255,0.55), rgba(255,255,255,0.10));
+          position: absolute; left: 1px; right: 1px; top: 1px; height: 45%;
+          background: linear-gradient(rgba(255,255,255,0.28), rgba(255,255,255,0));
           border-radius: 6px 6px 0 0; pointer-events: none;
         }
         /* damage feedback: white flash on the fill before the red trail drains */
@@ -807,15 +882,42 @@ export class UI {
           grid-area: 1 / 1; padding: 3px; background: #6b4a12;
           clip-path: polygon(0% 50%, 29px 0%, calc(100% - 29px) 0%, 100% 50%,
             calc(100% - 29px) 100%, 29px 100%);
-          filter: drop-shadow(0 6px 14px rgba(0,0,12,0.6));
+          /* the plaque is an OBJECT in front of the world, not a decal: it casts
+             onto sky, grass rim and cliff alike */
+          filter: drop-shadow(0 9px 15px rgba(0,0,20,0.62))
+                  drop-shadow(0 2px 3px rgba(0,0,20,0.5));
         }
+        /* padding-right +12 balances the wordmark against the right chamfer */
         #hud .banner .bPlaque {
           position: relative;
-          padding: 8px 48px 11px;
+          padding: 8px 60px 11px 48px;
           background: linear-gradient(180deg, #fff0bc 0%, #e8b64a 42%, #a9741a 100%);
           clip-path: polygon(0% 50%, 26px 0%, calc(100% - 26px) 0%, 100% 50%,
             calc(100% - 26px) 100%, 26px 100%);
+          /* moulded metal: lit along the top edge, dark inset along the bottom */
+          box-shadow: inset 0 2px 0 rgba(255,244,200,0.9),
+            inset 0 -3px 0 rgba(90,58,10,0.92);
         }
+        /* ---- rival variant: a different STATE deserves a different colour ---- */
+        #hud .banner.rival .bEdge { background: #7a3010; }
+        #hud .banner.rival .bPlaque {
+          background: linear-gradient(180deg, #ffc79a 0%, #e07a4a 42%, #7a3010 100%);
+          box-shadow: inset 0 2px 0 rgba(255,222,196,0.9),
+            inset 0 -3px 0 rgba(86,30,8,0.92);
+        }
+        #hud .banner.rival .bPlaque::before {
+          background:
+            linear-gradient(180deg, rgba(255,255,255,0.20) 0%,
+              rgba(255,255,255,0.07) 26%, rgba(255,255,255,0) 46%),
+            linear-gradient(180deg, rgba(122,36,54,0.97) 0%,
+              rgba(74,18,32,0.97) 46%, rgba(42,10,18,0.97) 100%);
+        }
+        #hud .banner.rival .bFill {
+          background: linear-gradient(180deg, #fff2e0 0%, #ffd9a0 34%,
+            #ff9a5a 62%, #e8622a 82%, #ffb07a 100%);
+          -webkit-background-clip: text; background-clip: text; color: transparent;
+        }
+        #hud .banner.rival .bStroke { -webkit-text-stroke-color: #2a0a12; color: #2a0a12; }
         #hud .banner .bPlaque::before { /* navy face inset inside the gold edge */
           content: ''; position: absolute; inset: 4px;
           background:
@@ -870,21 +972,28 @@ export class UI {
           background: linear-gradient(180deg, #ffe9b0 0%, #ff9d4d 35%, #ff5b4d 60%, #d92312 100%);
           -webkit-background-clip: text; background-clip: text; color: transparent;
         }
-        /* MISS / SPLASH: cool, smaller, faster — an acknowledgement, not a hit */
-        #hud .dmg.callout { animation-duration: 0.85s; }
+        /* MISS / SPLASH: an acknowledgement, not a hit — but it is GUARANTEED
+           by construction to land on the brightest pixels in the frame, so it
+           gets a cream face, a fat near-black outline and a dark halo instead
+           of the old blue-grey that dissolved into the fireball's white core. */
         #hud .dmg.callout > span { font-size: 34px; letter-spacing: 2px; }
         #hud .dmg.callout .dStroke {
-          color: #071229; -webkit-text-stroke: 6px #071229;
+          color: #1a1230; -webkit-text-stroke: 8px #1a1230;
+          filter: drop-shadow(0 0 16px rgba(0,0,20,0.95))
+                  drop-shadow(0 0 7px rgba(0,0,20,0.9))
+                  drop-shadow(0 3px 0 #1a1230);
         }
         /* background-image, NOT the background shorthand: the shorthand resets
            background-clip:text and would paint a solid slab. */
         #hud .dmg.callout .dFill {
-          background-image: linear-gradient(180deg, #f2f8ff 0%, #bcd4f2 45%, #7e9ed2 75%, #4c6da8 100%);
+          background-image: linear-gradient(180deg, #fffdf2 0%, #fff4d2 42%, #ffe19a 74%, #e8b64a 100%);
           -webkit-background-clip: text; background-clip: text; color: transparent;
+          -webkit-text-stroke: 2px rgba(232,182,74,0.55);
         }
         #hud .dmg.callout.water .dFill {
-          background-image: linear-gradient(180deg, #eafaff 0%, #9fe4ff 45%, #4fb8ef 78%, #1f6fd9 100%);
+          background-image: linear-gradient(180deg, #f4fdff 0%, #d6f4ff 42%, #8fdcff 76%, #35a6e8 100%);
           -webkit-background-clip: text; background-clip: text; color: transparent;
+          -webkit-text-stroke: 2px rgba(60,150,220,0.5);
         }
         @keyframes dmgFloat {
           0%   { transform: translate(-50%, 10px) scale(0.3); opacity: 0; }
@@ -894,55 +1003,142 @@ export class UI {
           100% { transform: translate(-50%, -84px) scale(0.92); opacity: 0; }
         }
 
-        /* ============ help tab (tucked into the dock's top rail) ============ */
+        /* ===== help strip: a free-floating plate, NOT a sticker on the dock =====
+           It used to laminate over the dock's top rail and chop the console's
+           one unbroken gold border in half at frame centre. Now it clears the
+           rail by 10px and carries its own 4-side trim. */
         #hud .help {
-          position: absolute; bottom: 100%; left: 50%;
-          transform: translate(-50%, 3px);
+          position: absolute; bottom: calc(100% + 12px); left: 50%;
+          transform: translate(-50%, 0);
           display: flex; align-items: center; gap: 5px;
-          padding: 4px 14px 7px; border-radius: 11px 11px 0 0;
+          padding: 5px 14px 6px; border-radius: 12px;
           background: linear-gradient(180deg, #2c3a6b, #1a2352 60%, #161e42);
-          border: 2px solid #e8b64a; border-bottom: none;
-          box-shadow: inset 0 1px 0 rgba(255,255,255,0.22);
+          border: 2px solid #e8b64a;
+          box-shadow: 0 0 0 2px #6b4a12, inset 0 1px 0 rgba(255,255,255,0.24);
+          filter: drop-shadow(0 4px 8px rgba(0,0,20,0.55));
           color: #ffe7a0; font-size: 11px; font-weight: 800;
           letter-spacing: 0.09em; text-shadow: 0 1px 2px #000; white-space: nowrap;
           transition: opacity 0.3s, visibility 0.3s, transform 0.3s;
         }
         #hud .help.gone {
-          opacity: 0; visibility: hidden; transform: translate(-50%, 26px);
+          opacity: 0; visibility: hidden; transform: translate(-50%, 30px);
         }
         #hud .help .ht { margin: 0 2px 0 1px; }
         #hud .help .sep { width: 4px; height: 4px; border-radius: 50%;
           background: rgba(255,215,94,0.5); margin: 0 5px; }
+        /* one keycap recipe for all four caps (the SPACE plate used to be a
+           different object from the arrow caps) — this is the .shotBtn kit */
         #hud .key {
           display: inline-flex; align-items: center; justify-content: center;
-          min-width: 22px; height: 20px; padding: 0 4px; border-radius: 4px;
+          min-width: 22px; height: 20px; padding: 0 4px; border-radius: 5px;
           background: linear-gradient(#3b4a80, #1c2549 60%, #141b3d);
           border: 1px solid #0a0f22;
-          box-shadow: inset 0 1px 0 rgba(255,255,255,0.3), 0 1px 0 rgba(0,0,0,0.8);
-          color: #fff; font-size: 11px; font-weight: 800; line-height: 1;
-          letter-spacing: 0;
+          box-shadow: inset 0 1px 0 rgba(255,255,255,0.28), 0 2px 0 rgba(0,0,0,0.6);
+          color: #aebbe8; font-size: 11px; font-weight: 800; line-height: 1;
+          letter-spacing: 0; text-shadow: 0 1px 2px #000;
         }
         #hud .key.kw { min-width: 44px; }
 
         /* ============ touch controls (shown only on coarse pointers) ======= */
+        /* Each cluster is ONE welded control on its own plate — label, steppers
+           and (for AIM) the live readout — instead of four islands scattered
+           across 40px of terrain. */
         #hud .tcluster {
           position: absolute; display: none; gap: 10px; z-index: 6;
-          padding: 9px; border-radius: 22px;
-          background: radial-gradient(closest-side, rgba(6,10,26,0.5), rgba(6,10,26,0) 74%);
+          padding: 15px 9px 9px; border-radius: 20px;
+          background: rgba(8,14,34,0.42);
+          box-shadow: inset 0 1px 0 rgba(160,190,255,0.14);
           bottom: calc(10px + env(safe-area-inset-bottom, 0px));
         }
+        /* plated caption: gold micro-caps used to sit unbacked on open ocean
+           and on pale cliff strata, where contrast collapsed to nothing */
         #hud .tcluster .tcap {
-          position: absolute; left: 50%; top: -3px; transform: translateX(-50%);
+          position: absolute; left: 50%; top: 1px; transform: translateX(-50%);
+          padding: 1px 8px 2px; border-radius: 7px;
+          background: rgba(8,14,34,0.85);
+          box-shadow: inset 0 1px 0 rgba(160,190,255,0.18);
           font-size: 9px; font-weight: 800; letter-spacing: 0.16em;
-          color: #ffe7a0; text-shadow: 0 1px 3px #000, 0 0 8px rgba(0,0,10,0.9);
+          color: #ffe9b0; text-shadow: 0 1px 2px #000;
           pointer-events: none;
         }
         #hud.touch .tcluster { display: flex; }
         #hud .tcluster.moveC { left: calc(8px + env(safe-area-inset-left, 0px)); }
         #hud .tcluster.aimC {
           right: calc(92px + env(safe-area-inset-right, 0px));
-          flex-direction: column;
+          flex-direction: column; align-items: center; gap: 6px;
         }
+        /* dead controls must LOOK dead: half the touch bar used to stay fully
+           lit while the shell was in the air and through the rival's turn */
+        #hud .tcluster.off .tbtn {
+          filter: grayscale(0.78) brightness(0.5);
+          border-color: #7a6a44;
+          box-shadow: 0 0 0 2px #3a3018, inset 0 1px 0 rgba(255,255,255,0.12);
+        }
+        #hud .tcluster.off .tcap { color: #93a0c2; }
+        #hud .tcluster.off .angleChip { filter: grayscale(0.6) brightness(0.62); }
+
+        /* --- weapon selector: the touch layout offered fewer verbs than the
+           2003 reference. 1 / 2 / SS, active one ringed in gold. --- */
+        /* Shot selector rides the freed bottom edge next to MOVE rather than
+           the right rail, where it would stack on top of the aim column and
+           the world's own distance marker. */
+        #hud .wsel {
+          position: absolute; display: none; z-index: 7;
+          gap: 6px; padding: 15px 9px 9px; border-radius: 20px;
+          background: rgba(8,14,34,0.42);
+          box-shadow: inset 0 1px 0 rgba(160,190,255,0.14);
+          left: calc(136px + env(safe-area-inset-left, 0px));
+          bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+        }
+        #hud .wsel .tcap {
+          position: absolute; left: 50%; top: 1px; transform: translateX(-50%);
+          padding: 1px 8px 2px; border-radius: 7px;
+          background: rgba(8,14,34,0.85);
+          box-shadow: inset 0 1px 0 rgba(160,190,255,0.18);
+          font-size: 9px; font-weight: 800; letter-spacing: 0.16em;
+          color: #ffe9b0; text-shadow: 0 1px 2px #000; pointer-events: none;
+        }
+        #hud .wchip {
+          pointer-events: auto; width: 36px; height: 36px; border-radius: 10px;
+          display: flex; align-items: center; justify-content: center;
+          background: linear-gradient(180deg, #3b4a80, #1c2549 60%, #141b3d);
+          border: 2px solid #6b4a12;
+          box-shadow: inset 0 1px 0 rgba(255,255,255,0.24), 0 3px 8px rgba(0,0,0,0.5);
+          color: #aebbe8; font-size: 14px; font-weight: 800;
+          text-shadow: 0 1px 2px #000; touch-action: none;
+        }
+        #hud .wchip.on {
+          background: linear-gradient(180deg, #ffe9a0, #ffd75e 55%, #d59b1f);
+          border-color: #e8b64a; color: #402c05; text-shadow: 0 1px 0 rgba(255,255,255,0.5);
+          box-shadow: inset 0 1px 0 rgba(255,255,255,0.7),
+            0 0 14px rgba(255,215,94,0.55), 0 3px 8px rgba(0,0,0,0.5);
+        }
+        #hud .wsel.off .wchip { filter: grayscale(0.78) brightness(0.55); }
+
+        /* --- pause: every commercial game has one --- */
+        #hud .pauseBtn {
+          position: absolute; display: none; z-index: 9;
+          top: calc(6px + env(safe-area-inset-top, 0px));
+          left: 50%; transform: translateX(70px);
+          pointer-events: auto; width: 34px; height: 34px; border-radius: 10px;
+          align-items: center; justify-content: center; gap: 3px;
+          background: linear-gradient(180deg, #3b4d8f, #232e5c 45%, #131a38);
+          border: 2px solid #e8b64a;
+          box-shadow: 0 0 0 2px #6b4a12, inset 0 1px 0 rgba(255,255,255,0.3),
+            0 4px 10px rgba(0,0,0,0.5);
+        }
+        #hud .pauseBtn i {
+          width: 4px; height: 13px; border-radius: 1px; background: #ffe7a0;
+          box-shadow: 0 1px 2px rgba(0,0,10,0.8);
+        }
+        #hud .pauseVeil {
+          position: absolute; inset: 0; display: none; z-index: 50;
+          align-items: center; justify-content: center; pointer-events: auto;
+          background: rgba(6,10,26,0.62);
+          color: #ffd75e; font-size: 30px; font-weight: 800; letter-spacing: 4px;
+          text-shadow: 0 3px 0 #6b4a12, 0 6px 16px rgba(0,0,0,0.7);
+        }
+        #hud.paused .pauseVeil { display: flex; }
         #hud .tbtn {
           pointer-events: auto; width: 48px; height: 48px; border-radius: 14px;
           display: flex; align-items: center; justify-content: center;
@@ -963,26 +1159,25 @@ export class UI {
             inset 0 1px 0 rgba(255,255,255,0.35), 0 3px 8px rgba(0,0,0,0.5);
         }
         #hud.touch .fireBtn { pointer-events: auto; touch-action: none; }
-        /* Live angle (+ power) chip pinned in the thumb's field of view, right
-           where the aim buttons are — desktop keeps the console LED instead. */
+        /* Live angle readout, IN FLOW between the two aim steppers: as a free
+           floating chip it was a fourth island and it shared its rect with the
+           world-space distance marker, so two gold readouts stacked. */
         #hud .angleChip {
-          position: absolute; display: none; z-index: 7;
-          right: calc(10px + env(safe-area-inset-right, 0px));
-          bottom: calc(96px + env(safe-area-inset-bottom, 0px));
-          align-items: baseline; gap: 6px; padding: 3px 11px 4px;
-          border-radius: 10px;
+          display: none; align-self: stretch;
+          align-items: baseline; justify-content: center; gap: 5px;
+          padding: 2px 8px 3px; border-radius: 9px;
           background: linear-gradient(#050a18, #0c1430 60%, #101a3e);
           border: 2px solid #e8b64a;
           box-shadow: 0 0 0 2px #6b4a12, inset 0 3px 8px rgba(0,0,0,0.9),
-            0 4px 12px rgba(0,0,0,0.6);
+            0 3px 9px rgba(0,0,0,0.6);
         }
         #hud .angleChip .acVal {
           font-family: 'Baloo 2', Consolas, monospace;
-          font-size: 22px; font-weight: 800; line-height: 1.1; color: #ffe27a;
+          font-size: 20px; font-weight: 800; line-height: 1.15; color: #ffe27a;
           text-shadow: 0 0 8px rgba(255,190,60,0.85);
         }
         #hud .angleChip .acPow {
-          font-size: 12px; font-weight: 800; color: #ff9d4d;
+          font-size: 11px; font-weight: 800; color: #ff9d4d;
           text-shadow: 0 1px 2px #000;
         }
 
@@ -1023,7 +1218,7 @@ export class UI {
           #hud .console .idBox, #hud .console .slotsBox { display: none; }
           #hud .angle { font-size: 22px; }
           #hud .ledScreen { min-width: 80px; }
-          #hud .powerWrap { height: 28px; }
+          #hud .powerWrap { height: 36px; }
           #hud .players { width: 210px; }
           #hud .players.left { left: calc(10px + env(safe-area-inset-left, 0px)); }
           #hud .players.right { right: calc(10px + env(safe-area-inset-right, 0px)); }
@@ -1043,49 +1238,97 @@ export class UI {
           #hud .dmg.callout .dStroke { -webkit-text-stroke-width: 4.5px; }
         }
 
+        /* charge readout under the thumb that is doing the charging: a conic
+           ring wrapped around FIRE, used on short viewports where the console's
+           power trough is gone entirely */
+        #hud .powerRing {
+          position: fixed; display: none; z-index: 39;
+          right: calc(4px + env(safe-area-inset-right, 0px));
+          bottom: calc(4px + env(safe-area-inset-bottom, 0px));
+          width: 88px; height: 88px; border-radius: 50%;
+          background: conic-gradient(#ffcf4a var(--pow, 0turn), rgba(6,10,26,0.5) 0);
+          box-shadow: 0 0 0 2px rgba(10,15,34,0.9), 0 4px 12px rgba(0,0,10,0.5);
+          pointer-events: none;
+        }
+        #hud .fireCap {
+          position: fixed; display: none; z-index: 8;
+          left: 50%; transform: translateX(-50%);
+          bottom: calc(9px + env(safe-area-inset-bottom, 0px));
+          padding: 3px 12px 4px; border-radius: 9px;
+          background: rgba(8,14,34,0.82);
+          box-shadow: inset 0 1px 0 rgba(160,190,255,0.18);
+          font-size: 10px; font-weight: 800; letter-spacing: 0.13em;
+          color: #ffe9b0; text-shadow: 0 1px 2px #000;
+          pointer-events: none; animation: hintPulse 1.5s ease-in-out infinite;
+        }
+        /* retires for good after the first shot, exactly like the desktop hint */
+        #hud .fireCap.gone { opacity: 0; visibility: hidden; }
+        /* while charging the same slot carries the live value instead */
+        #hud .fireCap.hot {
+          animation: none; padding: 2px 14px 3px;
+          font-family: 'Baloo 2', 'Trebuchet MS', sans-serif;
+          font-size: 19px; letter-spacing: 1px; color: #fff6d0;
+          text-shadow: 0 2px 0 rgba(90,25,4,0.95), 0 0 10px rgba(255,150,50,0.6);
+          background: rgba(8,14,34,0.9);
+          box-shadow: inset 0 1px 0 rgba(255,215,94,0.35), 0 0 14px rgba(255,140,0,0.45);
+        }
+
         /* ====== short viewports (phone landscape): reclaim the playfield ======
-           The console collapses to a single slim shelf, FIRE leaves the slab for
-           the bottom-right corner where the thumb actually is, and every micro
-           caption is dropped rather than shrunk. */
+           The opaque console slab is GONE. Charge lives in a ring around FIRE,
+           the clock moves up into the top band beside the compass, and the
+           bottom 56px go back to the map. */
         @media (max-height: 500px) {
           #hud .baseboard { display: none; }
           #hud .help { display: none; }
           #hud .dock {
-            left: 0; right: 0; bottom: 0; border-radius: 0;
-            border-left: none; border-right: none; border-bottom: none;
-            box-shadow: 0 0 0 2px #6b4a12 inset, inset 0 2px 0 rgba(255,255,255,0.3),
-              inset 0 -8px 14px rgba(0,0,0,0.45), 0 -6px 20px rgba(0,0,10,0.5);
+            left: 0; right: 0; bottom: 0; height: 0; padding: 0;
+            background: none; border: none; box-shadow: none; border-radius: 0;
+            pointer-events: none;
           }
           #hud .dock::before { display: none; }
-          #hud .console {
-            flex: 1 1 auto;
-            padding: 5px calc(168px + env(safe-area-inset-right, 0px))
-                     5px calc(130px + env(safe-area-inset-left, 0px));
+          #hud .console { flex: 1 1 auto; padding: 0; }
+          #hud .miniLabel { display: none; }
+          #hud .row > .angleBox, #hud .row > .powerBox { display: none; }
+          #hud .row { gap: 0; align-items: center; }
+          /* clock lands in the top band, left of the compass, where every
+             mobile artillery game puts it — and it gets its caption back */
+          #hud .timerBox {
+            position: fixed; z-index: 8; gap: 1px;
+            top: calc(5px + env(safe-area-inset-top, 0px));
+            left: 50%; transform: translateX(-122px);
           }
-          /* one row, no label text: the numerals, the bar and the ring speak */
-          #hud .miniLabel, #hud .powerScale { display: none; }
-          #hud .row > .angleBox { display: none; }
-          #hud .row { gap: 12px; align-items: center; }
-          #hud .powerWrap { height: 26px; }
-          #hud .powerBox { align-self: center; }
-          #hud .timerRing { width: 44px; height: 44px; }
-          #hud .timerFace { width: 28px; height: 28px; }
-          #hud .timer { font-size: 15px; }
+          #hud .timerBox .miniLabel {
+            display: block; height: 10px; line-height: 10px;
+            font-size: 8px; letter-spacing: 1.6px;
+          }
+          #hud .timerRing { width: 46px; height: 46px; }
+          #hud .timerFace { width: 30px; height: 30px; }
+          #hud .timer { font-size: 16px; }
           /* FIRE: biggest, brightest, in the corner the thumb already covers */
           #hud .fireBtn {
             position: fixed; z-index: 40; margin: 0;
             right: calc(10px + env(safe-area-inset-right, 0px));
             bottom: calc(10px + env(safe-area-inset-bottom, 0px));
-            width: 76px; height: 76px; flex: 0 0 76px; font-size: 16px;
+            width: 76px; height: 76px; flex: 0 0 76px;
           }
-          #hud .angleChip { display: flex; }
-          #hud .tcluster { gap: 8px; padding: 8px; }
+          #hud .fireBtn .fLabel { font-size: 20px; }
+          #hud.touch .powerRing { display: block; }
+          #hud.touch .wsel, #hud.touch .pauseBtn { display: flex; }
+          #hud.touch .fireCap { display: block; }
+          #hud.touch .angleChip { display: flex; }
+          #hud .angleChip .acPow { display: none; }
+          #hud .tcluster { gap: 6px; padding: 14px 8px 8px; }
           #hud .tcluster.moveC { left: calc(6px + env(safe-area-inset-left, 0px)); }
           #hud .tbtn { width: 46px; height: 46px; font-size: 18px; }
-          /* top edge = one band: nothing overhangs into the play area */
-          #hud .windWrap { top: calc(6px + env(safe-area-inset-top, 0px)); }
-          #hud .windPlate { transform: scale(0.66); transform-origin: top center; }
-          #hud .players { top: calc(8px + env(safe-area-inset-top, 0px)); width: 178px; }
+          /* top edge = one band: a real compact compass, not a squashed one
+             (the scale transform halved its border weight next to the cards) */
+          #hud .windWrap { top: calc(5px + env(safe-area-inset-top, 0px)); }
+          #hud .windPlate { padding: 3px 11px 3px 4px; gap: 6px; }
+          #hud .wind { width: 44px; height: 44px; }
+          #hud .windSvg .wax { font-size: 21px; stroke-width: 4px; }
+          #hud .windLabel { font-size: 8px; letter-spacing: 1.4px; }
+          #hud .windBadge { font-size: 19px; }
+          #hud .players { top: calc(5px + env(safe-area-inset-top, 0px)); width: 178px; }
           #hud .pcard { padding: 5px 8px 6px; border-radius: 10px; }
           #hud .portraitFrame { flex: 0 0 28px; width: 28px; height: 28px; }
           #hud .pname { font-size: 12px; }
@@ -1112,14 +1355,16 @@ export class UI {
           <div class="wind">
             <svg class="windSvg" viewBox="0 0 100 100">
               <defs>
-                <linearGradient id="gbWindGrad" x1="0" y1="0" x2="0" y2="1">
-                  <stop class="wg0" offset="0" stop-color="#b6ffc4"/>
-                  <stop class="wg1" offset="1" stop-color="#1d9c38"/>
+                <linearGradient id="gbWindGrad" x1="0" y1="0" x2="1" y2="0">
+                  <stop class="wg0" offset="0" stop-color="#ff9436"/>
+                  <stop class="wg1" offset="1" stop-color="#ffe27a"/>
                 </linearGradient>
               </defs>
               <g class="windTicks"></g>
-              <text class="wax" x="22" y="31" text-anchor="middle">L</text>
-              <text class="wax" x="78" y="31" text-anchor="middle">R</text>
+              <text class="wax" x="9" y="50" text-anchor="middle"
+                dominant-baseline="central">L</text>
+              <text class="wax" x="91" y="50" text-anchor="middle"
+                dominant-baseline="central">R</text>
               <g class="needleG">
                 <g class="windStreaks" stroke="rgba(255,255,255,0.4)"
                   stroke-width="2.2" stroke-linecap="round">
@@ -1127,16 +1372,13 @@ export class UI {
                   <line x1="8" y1="70" x2="22" y2="70"/>
                   <line x1="3" y1="50" x2="12" y2="50"/>
                 </g>
-                <!-- One unbroken arrow. Nothing is drawn on top of it any more
-                     (the number moved out of the dial), so it always reads as
-                     a single shape pointing downwind. -->
+                <!-- One unbroken arrow whose LENGTH and THICKNESS are the wind
+                     magnitude: the path is rebuilt in setWind(), so a wind of 1
+                     is a stub and a gale spans the dial. -->
                 <path class="needleMain"
-                  d="M 8 43 L 54 43 L 54 25 L 95 50 L 54 75 L 54 57 Z"
-                  fill="url(#gbWindGrad)" stroke="#101630" stroke-width="3.4"
+                  d="M 35 48 L 62 48 L 62 41 L 74 50 L 62 59 L 62 52 Z"
+                  fill="url(#gbWindGrad)" stroke="#1a1230" stroke-width="2.6"
                   stroke-linejoin="round"/>
-                <path class="needleFin" d="M 16 47.5 L 46 47.5"
-                  stroke="rgba(255,255,255,0.45)" stroke-width="2.4" fill="none"
-                  stroke-linecap="round"/>
               </g>
             </svg>
             <div class="gloss"></div>
@@ -1203,10 +1445,9 @@ export class UI {
                 <div class="powerEdge"></div>
                 <div class="powerLast" style="left:0%"></div>
                 <div class="powerHint">HOLD FIRE TO CHARGE</div>
+                <div class="powerNum"></div>
               </div>
-              <div class="powerScale">
-                <span>0</span><span>25</span><span>50</span><span>75</span><span>100</span>
-              </div>
+              <div class="miniLabel">POWER</div>
             </div>
             <div class="col slotsBox">
               <div class="slots">
@@ -1225,7 +1466,10 @@ export class UI {
               <div class="timerRing"><div class="timerFace"><div class="timer">20</div></div></div>
               <div class="miniLabel">TIME</div>
             </div>
-            <div class="fireBtn"><span>FIRE</span></div>
+            <div class="fireBtn">
+              <span class="fLabel">FIRE</span>
+              <i class="fDots"><b></b><b></b><b></b></i>
+            </div>
           </div>
         </div>
 
@@ -1243,8 +1487,7 @@ export class UI {
         </div>
       </div>
 
-      <div class="angleChip"><span class="acVal">45&#176;</span><span class="acPow"></span></div>
-
+      <div class="powerRing"></div>
       <div class="tcluster moveC">
         <div class="tbtn tLeft">&#9666;</div>
         <div class="tbtn tRight">&#9656;</div>
@@ -1252,9 +1495,19 @@ export class UI {
       </div>
       <div class="tcluster aimC">
         <div class="tbtn tUp">&#9652;</div>
+        <div class="angleChip"><span class="acVal">45&#176;</span><span class="acPow"></span></div>
         <div class="tbtn tDown">&#9662;</div>
         <span class="tcap">AIM</span>
       </div>
+      <div class="wsel">
+        <div class="wchip on" data-w="0">1</div>
+        <div class="wchip" data-w="1">2</div>
+        <div class="wchip" data-w="2">SS</div>
+        <span class="tcap">SHOT</span>
+      </div>
+      <div class="fireCap">HOLD FIRE TO CHARGE</div>
+      <div class="pauseBtn"><i></i><i></i></div>
+      <div class="pauseVeil">PAUSED</div>
       <div class="rotateOverlay">
         <div class="rotIcon">&#128241;</div>
         <div class="rotText">Rotate your device to play</div>
@@ -1273,7 +1526,7 @@ export class UI {
       windLog: null,
       dock: root.querySelector('.dock'),
       console: root.querySelector('.console'),
-      fireLabel: root.querySelector('.fireBtn span'),
+      fireLabel: root.querySelector('.fireBtn .fLabel'),
       orderQ: root.querySelector('.orderQ'),
       lsA: root.querySelector('.lsA'),
       lsP: root.querySelector('.lsP'),
@@ -1285,6 +1538,13 @@ export class UI {
       acPow: root.querySelector('.acPow'),
       segRow: root.querySelector('.segRow'),
       powerWrap: root.querySelector('.powerWrap'),
+      powerNum: root.querySelector('.powerNum'),
+      powerRing: root.querySelector('.powerRing'),
+      fireCap: root.querySelector('.fireCap'),
+      pauseVeil: root.querySelector('.pauseVeil'),
+      wsel: root.querySelector('.wsel'),
+      pauseBtn: root.querySelector('.pauseBtn'),
+      clusters: Array.from(root.querySelectorAll('.tcluster')),
       powerLast: root.querySelector('.powerLast'),
       powerEdge: root.querySelector('.powerEdge'),
       timer: root.querySelector('.timer'),
@@ -1309,10 +1569,12 @@ export class UI {
     this.isTouch = matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
     if (this.isTouch) root.classList.add('touch');
 
-    // 8 radial rim ticks on the wind dial.
+    // 6 radial rim ticks on the wind dial (the 3 and 9 o'clock slots are left
+    // to the L / R glyphs so nothing crowds the horizontal axis).
     {
       let t = '';
       for (let i = 0; i < 8; i++) {
+        if (i === 0 || i === 4) continue;
         const a = (i * Math.PI) / 4;
         const c = Math.cos(a), s = Math.sin(a);
         t += `<line x1="${(50 + c * 42).toFixed(1)}" y1="${(50 + s * 42).toFixed(1)}"
@@ -1342,6 +1604,7 @@ export class UI {
     this._timerMax = 20;
     this._cards = new Map(); // name -> { card, fill, trail, num, avatar, trailPct, timer }
     this._curAngle = 45;     // live angle (for the prev-shot ghost readout)
+    this._lastAngle = null;  // angle of the previous shot (null = none yet)
     this._helpGone = false;  // one-shot: hint fades permanently after 1st fire
     this._idSet = false;     // console identity portrait painted once
     this._bRaf = 0;          // banner dismiss rAF handle
@@ -1396,26 +1659,74 @@ export class UI {
     hold(this.el.tUp, 'ArrowUp');
     hold(this.el.tDown, 'ArrowDown');
     hold(this.el.fireBtn, 'Space'); // hold to charge, release to fire
+    this._bindShotSelect();
+    this._bindPause();
+  }
+
+  // Shot selector (1 / 2 / SS). Mirrors the console's keycap row so the touch
+  // layout shows the same verbs; selection is a display state, exactly as it
+  // is on the desktop bar.
+  _bindShotSelect() {
+    const chips = Array.from(this.root.querySelectorAll('.wchip'));
+    const caps = Array.from(this.root.querySelectorAll('.shotBtn'));
+    const pick = (i) => {
+      chips.forEach((c, k) => c.classList.toggle('on', k === i));
+      caps.forEach((c, k) => c.classList.toggle('on', k === i));
+    };
+    chips.forEach((c, i) => {
+      c.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        if (this.el.wsel && this.el.wsel.classList.contains('off')) return;
+        pick(i);
+      });
+      c.addEventListener('contextmenu', (e) => e.preventDefault());
+    });
+    caps.forEach((c, i) => c.addEventListener('pointerdown', () => pick(i)));
+  }
+
+  // Pause. Uses the debug step hook when it exists; otherwise it is a pure
+  // overlay, so it can never break a headless capture run.
+  _bindPause() {
+    const btn = this.el.pauseBtn, veil = this.el.pauseVeil;
+    if (!btn || !veil) return;
+    const set = (on) => {
+      this.root.classList.toggle('paused', on);
+      const G = window.__GB;
+      if (G && G.setSteps) G.setSteps(on ? 0 : 1);
+    };
+    btn.addEventListener('pointerdown', (e) => { e.preventDefault(); set(true); });
+    veil.addEventListener('pointerdown', (e) => { e.preventDefault(); set(false); });
   }
 
   setWind(wind) {
-    // wind: signed, positive = blowing right. One bold arrow (fin + shaft +
-    // fat head) crosses the dial behind the number badge; length scales and
-    // tint shifts green -> gold -> red with strength, plus a pulse on change.
+    // wind: signed, positive = blowing right. The dial is INFORMATIONAL: the
+    // arrow's length AND shaft thickness are the magnitude (a wind of 1 is a
+    // stub, a gale spans the dial) and its tint runs the HUD's own gold ->
+    // orange -> hot-red ramp. Only the rotation says which way.
     const s = Math.abs(wind);
     this.el.windVal.textContent = s.toFixed(0);
-    const t = Math.min(1, s / 9);
-    const scale = s === 0 ? 0.55 : 0.86 + t * 0.12;
-    this.el.windArrowWrap.style.transform =
-      `rotate(${wind >= 0 ? 0 : 180}deg) scale(${scale})`;
-    this.el.windArrowWrap.style.opacity = s === 0 ? 0.4 : 1;
-    let hi, lo;
-    if (s <= 3) { hi = '#b6ffc4'; lo = '#22b545'; }
-    else if (s <= 7) { hi = '#fff0b0'; lo = '#e0a422'; }
-    else { hi = '#ffc0b0'; lo = '#e03a22'; }
-    if (s === 0) { hi = '#c6d2f2'; lo = '#68789f'; }
-    this.el.windHi.setAttribute('stop-color', hi);
-    this.el.windLo.setAttribute('stop-color', lo);
+    const t = Math.min(1, s / MAX_WIND);
+    // Geometry in the 100-unit viewBox, centred on (50,50).
+    const L = 17 + 16 * t;                 // half-length: 17 -> 33
+    const hl = 12 + 5 * t;                 // head length
+    const hh = 9.5 + 4.5 * t;              // head half-height
+    const sh = 3.2 + 2.6 * t;              // shaft half-height
+    const x0 = 50 - L, x1 = 50 + L, xn = x1 - hl;
+    this.el.windArrow.setAttribute('d',
+      `M ${x0.toFixed(1)} ${(50 - sh).toFixed(1)} L ${xn.toFixed(1)} ${(50 - sh).toFixed(1)}` +
+      ` L ${xn.toFixed(1)} ${(50 - hh).toFixed(1)} L ${x1.toFixed(1)} 50` +
+      ` L ${xn.toFixed(1)} ${(50 + hh).toFixed(1)} L ${xn.toFixed(1)} ${(50 + sh).toFixed(1)} Z`);
+    this.el.windArrow.setAttribute('stroke-width', (1.6 + 1.0 * t).toFixed(2));
+    this.el.windArrowWrap.style.transform = `rotate(${wind >= 0 ? 0 : 180}deg)`;
+    this.el.windArrowWrap.style.opacity = s === 0 ? 0.45 : 1;
+    // tail -> head ramp, all inside the navy/gold system
+    let tail, head;
+    if (s === 0) { tail = '#6f7fa8'; head = '#a8b6d8'; }
+    else if (t <= 0.4) { tail = '#ffb84a'; head = '#fff2ce'; }
+    else if (t <= 0.7) { tail = '#ff9436'; head = '#ffe27a'; }
+    else { tail = '#e0491f'; head = '#ff5a3c'; }
+    this.el.windHi.setAttribute('stop-color', tail);
+    this.el.windLo.setAttribute('stop-color', head);
     this.el.windStreaks.style.opacity = s === 0 ? '0' : (0.25 + 0.55 * t).toFixed(2);
     // retrigger the 0.8s pulse
     this.el.windDial.classList.remove('pulse');
@@ -1430,18 +1741,39 @@ export class UI {
     const t = `${Math.round(a)}&#176;`;
     this.el.angle.innerHTML = t;
     if (this.el.acVal) this.el.acVal.innerHTML = t;
+    this._syncAnglePrev();
+  }
+
+  // The previous-shot ghost is only information while it DIFFERS from the live
+  // reading; printing "54° 54°" was duplicated noise.
+  _syncAnglePrev() {
+    const la = this._lastAngle;
+    const show = la != null && Math.round(this._curAngle) !== la;
+    if (show) this.el.anglePrev.innerHTML = `<i>&middot;</i>${la}&#176;`;
+    this.el.anglePrev.classList.toggle('show', show);
   }
 
   setPower(p) {
     const lit = Math.round((p / 100) * SEGS);
     // Pulsing leading edge + hot outer glow only while power is charged.
-    if (lit > 0) {
+    const hot = lit > 0;
+    if (hot) {
       this.el.powerEdge.style.left = `${p}%`;
       this.el.powerEdge.classList.add('on');
       this.el.powerWrap.classList.add('charging');
     } else {
       this.el.powerEdge.classList.remove('on');
       this.el.powerWrap.classList.remove('charging');
+    }
+    this.el.dock.classList.toggle('charging', hot);
+    // Live value replaces the hold-to-charge caption inside the trough, and
+    // drives the conic ring around FIRE on the touch layout.
+    if (this.el.powerNum) this.el.powerNum.textContent = `${Math.round(p)}%`;
+    if (this.el.powerRing)
+      this.el.powerRing.style.setProperty('--pow', `${(p / 100).toFixed(3)}turn`);
+    if (this.el.fireCap) {
+      this.el.fireCap.classList.toggle('hot', hot);
+      this.el.fireCap.textContent = hot ? `${Math.round(p)}%` : 'HOLD FIRE TO CHARGE';
     }
     // Live power numeral next to the angle chip (the touch layout's readout).
     if (this.el.acPow) this.el.acPow.textContent = p > 0 ? `${Math.round(p)}%` : '';
@@ -1461,8 +1793,8 @@ export class UI {
     this.el.powerLast.style.left = `${p}%`;
     this.el.powerLast.classList.add('show');
     // Prev-shot ghost inside the LED screen, so the caption stays "ANGLE".
-    this.el.anglePrev.innerHTML = `&#8634;${Math.round(this._curAngle)}&#176;`;
-    this.el.anglePrev.classList.add('show');
+    this._lastAngle = Math.round(this._curAngle);
+    this._syncAnglePrev();
     // LAST SHOT readout in the right wing (angle + power of the shot just made).
     if (this.el.lsA) {
       this.el.lsA.innerHTML = `${Math.round(this._curAngle)}&#176;`;
@@ -1476,15 +1808,19 @@ export class UI {
     this.el.dock.classList.add('fired');
     if (!this._rivalTurn) {
       this.el.dock.classList.add('firing');
-      this.el.fireLabel.textContent = '\u2022\u2022\u2022';
+      this.el.fireLabel.textContent = 'IN AIR';
     }
+    // Every control reports the same state: MOVE and AIM stop looking tappable
+    // the moment the shell leaves the barrel.
+    this._setControlsLive(false);
     this._shotPending = true;
     this._shotDmg = false;
-    // A shot was fired: permanently retire the control hint (one-shot flag).
+    // A shot was fired: permanently retire the control hints (one-shot flag).
     if (!this._helpGone) {
       this._helpGone = true;
       this.el.help.classList.add('gone');
     }
+    if (this.el.fireCap) this.el.fireCap.classList.add('gone');
   }
 
   setTimer(t) {
@@ -1493,14 +1829,16 @@ export class UI {
     this._lastT = t;
     this.el.timer.textContent = v;
     const frac = Math.max(0, Math.min(1, t / this._timerMax));
-    // Gold for both players; red is reserved strictly for the t<=5 low state so
-    // red never means anything except "hurry". The rival's turn is expressed by
-    // draining the arc's saturation instead of recolouring it orange.
-    const live = t <= 5 ? '#ff5b4d'
-      : this._rivalTurn ? 'rgba(255,215,94,0.34)' : 'var(--gold)';
-    const spent = 'rgba(255,215,94,0.18)';
-    this.el.timerRing.style.background =
-      `conic-gradient(${live} 0turn ${frac}turn, ${spent} ${frac}turn 1turn)`;
+    // Remaining time is ALWAYS a bright arc on a near-black track, on both
+    // turns: a full ring and an empty ring can never look the same. The rival's
+    // turn cools the arc to steel instead of erasing it. Red is reserved
+    // strictly for t<=5 so it only ever means "hurry".
+    const live = t <= 5 ? '#ff5b4d' : this._rivalTurn ? '#7f90bd' : '#ffd75e';
+    const spent = '#141c40';
+    // A full ring is painted flat, not as a 0->1turn conic: the wrap point left
+    // a 2px notch at 12 o'clock that read as a chip in the metal.
+    this.el.timerRing.style.background = frac >= 0.999 ? live
+      : `conic-gradient(${live} 0turn ${frac}turn, ${spent} ${frac}turn 1turn)`;
     this.el.timerRing.classList.toggle('low', t <= 5 && t > 0);
   }
 
@@ -1524,8 +1862,11 @@ export class UI {
       // never sits on the frame's centre line where the trajectory lives.
       this.el.banner.classList.toggle('sideL', isYou);
       this.el.banner.classList.toggle('sideR', !isYou);
+      // friend / foe is carried by COLOUR, not only by the word: navy+gold for
+      // you, a hot maroon+ember plaque for the rival.
+      this.el.banner.classList.toggle('rival', !isYou);
     } else {
-      this.el.banner.classList.remove('sideL', 'sideR');
+      this.el.banner.classList.remove('sideL', 'sideR', 'rival');
     }
     this.el.bStroke.textContent = text;
     this.el.bFill.textContent = text;
@@ -1559,6 +1900,7 @@ export class UI {
     this.el.dock.classList.remove('firing');
     this.el.fireLabel.textContent = isYou ? 'FIRE' : 'WAIT';
     this.el.timerRing.classList.toggle('rival', !isYou);
+    this._setControlsLive(isYou);
     if (this._lastT != null) this.setTimer(this._lastT);
     for (const [n, c] of this._cards) {
       const active = n === activeName;
@@ -1571,6 +1913,14 @@ export class UI {
       this._round += 1;
       this.el.roundNum.textContent = this._round;
     }
+  }
+
+  // One shared affordance switch for every on-screen control: the touch
+  // steppers and the weapon selector go dead-looking in exactly the states
+  // where FIRE does. Public (additive) so game code can gate them too.
+  _setControlsLive(live) {
+    for (const c of this.el.clusters) c.classList.toggle('off', !live);
+    if (this.el.wsel) this.el.wsel.classList.toggle('off', !live);
   }
 
   // Ring the active portrait chip in the turn-order queue.
@@ -1617,46 +1967,72 @@ export class UI {
   // Frame-counted float (not a CSS/wall-clock animation) so the callout stays
   // in sync with game time the same way the turn banner does — under fixed-dt
   // or slow rendering it still reads at the right moment.
+  // Combat text is timed in SIMULATION ticks, not rendered frames: a paused or
+  // slow-rendering frame must not leave a callout stranded on screen a second
+  // and a half after the blast that spawned it. Falls back to frame counting
+  // when the debug hook is absent.
   _float(text, cls) {
+    const callout = cls.indexOf('callout') === 0;
     const d = document.createElement('div');
     d.className = `dmg ${cls}`;
     d.style.animation = 'none';
+    d.style.opacity = '0';
     const at = this._focusScreen();
+    // Impact callouts erupt well ABOVE the crater so they never sit on the
+    // white-hot core of the fireball (the one place they were guaranteed to be
+    // unreadable). Damage numbers rise from the hit itself.
+    const lift = callout ? this._calloutLift() : 26;
     if (at) {
       d.style.left = `${at.x + (Math.random() - 0.5) * 26}px`;
-      d.style.top = `${at.y + (Math.random() - 0.5) * 18}px`;
+      d.style.top = `${Math.max(64, at.y - lift + (Math.random() - 0.5) * 12)}px`;
     } else {
       d.style.left = `calc(50% + ${((Math.random() - 0.5) * 220).toFixed(0)}px)`;
-      d.style.top = '47%';
+      d.style.top = `calc(47% - ${lift}px)`;
     }
     d.innerHTML = `<span class="dStroke"></span><span class="dFill"></span>`;
     d.children[0].textContent = text;
     d.children[1].textContent = text;
     this.el.dmgLayer.appendChild(d);
 
-    const frames = cls.indexOf('callout') === 0 ? 62 : 74;
+    const G = window.__GB;
+    const ticks = (G && G.simTicks) ? () => G.simTicks() : null;
+    const t0 = ticks ? ticks() : 0;
+    // Callouts: 8-tick beat so the flash reads first, then 44 ticks of life —
+    // long gone by the aftermath beat. Damage numbers linger a little longer.
+    const delay = callout ? 4 : 0;
+    const life = callout ? 44 : 62;
     const key = (t, pts) => {
       for (let i = 1; i < pts.length; i++) {
         if (t <= pts[i][0]) {
-          const [t0, v0] = pts[i - 1], [t1, v1] = pts[i];
-          return v0 + (v1 - v0) * (t1 > t0 ? (t - t0) / (t1 - t0) : 1);
+          const [ta, v0] = pts[i - 1], [tb, v1] = pts[i];
+          return v0 + (v1 - v0) * (tb > ta ? (t - ta) / (tb - ta) : 1);
         }
       }
       return pts[pts.length - 1][1];
     };
     let n = 0;
     const step = () => {
-      const t = n / frames;
-      if (t >= 1 || !d.isConnected) { d.remove(); return; }
-      const sc = key(t, [[0, 0.3], [0.16, 1.25], [0.28, 1], [1, 0.92]]);
-      const ty = key(t, [[0, 10], [0.16, -6], [0.28, -12], [0.72, -52], [1, -84]]);
-      const op = key(t, [[0, 0], [0.14, 1], [0.72, 1], [1, 0]]);
+      if (!d.isConnected) return;
+      const age = ticks ? ticks() - t0 : n;
+      n++;
+      if (age < delay) { requestAnimationFrame(step); return; }
+      const t = (age - delay) / life;
+      if (t >= 1) { d.remove(); return; }
+      // 0.12s scale punch on birth: an impact stamp, not a static caption.
+      const sc = key(t, [[0, 1.35], [0.16, 0.96], [0.26, 1], [1, 0.92]]);
+      const ty = key(t, [[0, 8], [0.16, -4], [0.3, -10], [0.7, -34], [1, -50]]);
+      const op = key(t, [[0, 0], [0.1, 1], [0.62, 1], [1, 0]]);
       d.style.transform = `translate(-50%, ${ty.toFixed(1)}px) scale(${sc.toFixed(3)})`;
       d.style.opacity = op.toFixed(3);
-      n++;
       requestAnimationFrame(step);
     };
     step();
+  }
+
+  // How far above the impact a callout is planted, in CSS px — enough to clear
+  // the fireball entirely at both layouts.
+  _calloutLift() {
+    return this.root.clientHeight < 520 ? 84 : 150;
   }
 
   renderPlayers(mobiles) {
