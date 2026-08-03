@@ -1,8 +1,91 @@
 // HTML/CSS HUD overlay: GunBound-style candy console — wind compass, LED angle
 // readout, segmented power gauge, circular turn timer, HP cards, pop banners,
-// floating damage numbers. Pure CSS, no images.
+// floating damage numbers. Pure CSS + small painted <canvas> portraits.
 
 const SEGS = 30; // power gauge segment count
+
+// Linear interpolate two #rrggbb colors -> 'rgb(...)'.
+function lerpColor(a, b, t) {
+  const pa = parseInt(a.slice(1), 16), pb = parseInt(b.slice(1), 16);
+  const c = (sh) => Math.round(((pa >> sh) & 255) + (((pb >> sh) & 255) - ((pa >> sh) & 255)) * t);
+  return `rgb(${c(16)}, ${c(8)}, ${c(0)})`;
+}
+
+// Paint a chunky cartoon portrait of a mobile type onto a canvas.
+// Drawn once per (type, size); crisp at 2x backing resolution.
+function paintPortrait(canvas, typeKey, type, px) {
+  const s = px * 2;
+  canvas.width = s; canvas.height = s;
+  canvas.style.width = `${px}px`; canvas.style.height = `${px}px`;
+  const g = canvas.getContext('2d');
+  const u = s / 48; // 48-unit design grid
+  // sky vignette backdrop
+  const bg = g.createRadialGradient(24 * u, 17 * u, 4 * u, 24 * u, 26 * u, 34 * u);
+  bg.addColorStop(0, '#9fd0ff'); bg.addColorStop(0.6, '#5f8fdd'); bg.addColorStop(1, '#27356d');
+  g.fillStyle = bg; g.fillRect(0, 0, s, s);
+  g.lineJoin = g.lineCap = 'round';
+  g.strokeStyle = '#141224';
+  g.lineWidth = 2.2 * u;
+
+  if (typeKey === 'raider') {
+    // treads
+    g.fillStyle = '#2a2438';
+    g.beginPath(); g.roundRect(9 * u, 34 * u, 30 * u, 8 * u, 4 * u); g.fill(); g.stroke();
+    g.fillStyle = '#4d445f';
+    for (const wx of [14, 24, 34]) {
+      g.beginPath(); g.arc(wx * u, 38 * u, 2.4 * u, 0, Math.PI * 2); g.fill();
+    }
+    // hull
+    g.fillStyle = type.body;
+    g.beginPath(); g.roundRect(8 * u, 26 * u, 32 * u, 10 * u, 4 * u); g.fill(); g.stroke();
+    // barrel (up-right)
+    g.fillStyle = '#3a3350';
+    g.save();
+    g.translate(30 * u, 22 * u); g.rotate(-0.55);
+    g.beginPath(); g.roundRect(0, -2 * u, 13 * u, 4 * u, 2 * u); g.fill(); g.stroke();
+    g.restore();
+    // turret
+    g.fillStyle = type.body;
+    g.beginPath(); g.roundRect(14 * u, 16 * u, 18 * u, 12 * u, 5 * u); g.fill(); g.stroke();
+    g.fillStyle = type.accent;
+    g.beginPath(); g.roundRect(14 * u, 24 * u, 18 * u, 4 * u, 2 * u); g.fill();
+    // eyes on the turret
+    g.fillStyle = '#fff';
+    g.beginPath(); g.arc(20 * u, 21.5 * u, 3.1 * u, 0, Math.PI * 2); g.fill(); g.stroke();
+    g.beginPath(); g.arc(27 * u, 21.5 * u, 3.1 * u, 0, Math.PI * 2); g.fill(); g.stroke();
+    g.fillStyle = '#141224';
+    g.beginPath(); g.arc(21 * u, 21.7 * u, 1.4 * u, 0, Math.PI * 2); g.fill();
+    g.beginPath(); g.arc(28 * u, 21.7 * u, 1.4 * u, 0, Math.PI * 2); g.fill();
+    // hull highlight
+    g.fillStyle = 'rgba(255,255,255,0.32)';
+    g.beginPath(); g.roundRect(16 * u, 17.2 * u, 10 * u, 2.6 * u, 1.6 * u); g.fill();
+  } else {
+    // boomer: round cyan blob with antenna
+    g.fillStyle = '#ffd75e';
+    g.beginPath(); g.arc(24 * u, 9.5 * u, 2.3 * u, 0, Math.PI * 2); g.fill(); g.stroke();
+    g.beginPath(); g.moveTo(24 * u, 11.5 * u); g.lineTo(24 * u, 16 * u); g.stroke();
+    g.fillStyle = type.body;
+    g.beginPath(); g.ellipse(24 * u, 29 * u, 16.5 * u, 14 * u, 0, 0, Math.PI * 2);
+    g.fill(); g.stroke();
+    g.fillStyle = type.accent;
+    g.beginPath(); g.ellipse(24 * u, 36.5 * u, 12 * u, 6 * u, 0, 0, Math.PI); g.fill();
+    // dome highlight
+    g.fillStyle = 'rgba(255,255,255,0.4)';
+    g.beginPath(); g.ellipse(17 * u, 21.5 * u, 5.5 * u, 3 * u, -0.55, 0, Math.PI * 2); g.fill();
+    // eyes + smile
+    g.fillStyle = '#fff';
+    g.beginPath(); g.arc(18.5 * u, 27 * u, 4 * u, 0, Math.PI * 2); g.fill(); g.stroke();
+    g.beginPath(); g.arc(29.5 * u, 27 * u, 4 * u, 0, Math.PI * 2); g.fill(); g.stroke();
+    g.fillStyle = '#141224';
+    g.beginPath(); g.arc(19.8 * u, 27.5 * u, 1.8 * u, 0, Math.PI * 2); g.fill();
+    g.beginPath(); g.arc(30.8 * u, 27.5 * u, 1.8 * u, 0, Math.PI * 2); g.fill();
+    g.beginPath(); g.arc(24 * u, 32.5 * u, 3.4 * u, 0.25, Math.PI - 0.25); g.stroke();
+  }
+  // glass gloss across the top of the frame
+  const gl = g.createLinearGradient(0, 0, 0, s * 0.55);
+  gl.addColorStop(0, 'rgba(255,255,255,0.34)'); gl.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = gl; g.fillRect(0, 0, s, s * 0.55);
+}
 
 export class UI {
   constructor(root) {
@@ -15,7 +98,7 @@ export class UI {
           --navy-hi: #3b4d8f; --navy: #222d58; --navy-lo: #131a38;
           --gold: #ffd75e; --gold-hi: #fff3b8; --gold-lo: #b97f1d;
           --green: #46e065; --red: #ff5b4d;
-          font-family: 'Trebuchet MS', 'Segoe UI', Verdana, sans-serif;
+          font-family: 'Baloo 2', 'Trebuchet MS', 'Segoe UI', Verdana, sans-serif;
         }
         #hud .goldTrim {
           border: 2px solid #e8b64a;
@@ -28,88 +111,102 @@ export class UI {
 
         /* ============ wind compass ============ */
         #hud .windWrap {
-          position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
-          display: flex; flex-direction: column; align-items: center; gap: 0;
+          position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
+          filter: drop-shadow(0 3px 8px rgba(0,0,10,0.5));
         }
-        #hud .wind {
-          position: relative; width: 104px; height: 104px; border-radius: 50%;
-          background:
-            radial-gradient(circle at 50% 32%, #46599c 0%, #2a3668 42%, #161d3d 78%, #0c1128 100%);
-          border: 3px solid #e8b64a;
+        /* Opaque navy backing plate: separates the dial from busy world art. */
+        #hud .windPlate {
+          display: flex; flex-direction: column; align-items: center; gap: 3px;
+          padding: 8px 11px 5px; border-radius: 14px;
+          background: linear-gradient(180deg, #3b4d8f 0%, #232e5c 38%, #131a38 100%);
+          border: 2px solid #e8b64a;
           box-shadow:
             0 0 0 2px #6b4a12,
-            inset 0 10px 14px rgba(0,0,0,0.55),
-            inset 0 -4px 10px rgba(90,120,220,0.25),
-            0 6px 18px rgba(0,0,0,0.6);
+            inset 0 1px 0 rgba(255,255,255,0.35),
+            inset 0 -6px 10px rgba(0,0,0,0.4),
+            0 4px 12px rgba(0,0,0,0.55);
         }
-        #hud .wind .ticks {
-          position: absolute; inset: 6px; border-radius: 50%;
-          background: repeating-conic-gradient(from -1.25deg,
-            rgba(255,255,255,0.55) 0deg 2.5deg, transparent 2.5deg 30deg);
-          -webkit-mask: radial-gradient(circle, transparent 0 62%, #000 63% 78%, transparent 79%);
-                  mask: radial-gradient(circle, transparent 0 62%, #000 63% 78%, transparent 79%);
+        #hud .wind {
+          position: relative; width: 84px; height: 84px; border-radius: 50%;
+          background:
+            radial-gradient(circle at 50% 34%, #46599c 0%, #2a3668 44%, #161d3d 80%, #0c1128 100%);
+          border: 2px solid #e8b64a;
+          box-shadow:
+            0 0 0 1px #6b4a12,
+            inset 0 6px 10px rgba(0,0,0,0.55),
+            inset 0 -3px 8px rgba(90,120,220,0.22),
+            0 3px 8px rgba(0,0,0,0.5);
         }
+        #hud .windSvg {
+          position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible;
+        }
+        #hud .windSvg .needleG {
+          transform-box: view-box; transform-origin: 50% 50%;
+          transition: transform 0.45s cubic-bezier(.34,1.4,.64,1), opacity 0.3s;
+          filter: drop-shadow(0 2px 2px rgba(0,0,0,0.55));
+        }
+        /* soft offset gloss (no hard split) */
         #hud .wind .gloss {
-          position: absolute; left: 14%; right: 14%; top: 6%; height: 34%;
-          border-radius: 50%;
-          background: linear-gradient(rgba(255,255,255,0.35), rgba(255,255,255,0.02));
-          pointer-events: none;
-        }
-        #hud .wind .arrowWrap {
-          position: absolute; inset: 0;
-          display: flex; align-items: center; justify-content: center;
-          transition: transform 0.45s cubic-bezier(.34,1.4,.64,1);
-        }
-        #hud .wind .arrow {
-          width: 52px; height: 30px;
-          clip-path: polygon(0 36%, 52% 36%, 52% 8%, 100% 50%, 52% 92%, 52% 64%, 0 64%);
-          background: #cfe0ff;
-          filter: drop-shadow(0 0 6px rgba(255,215,94,0.0)) drop-shadow(0 2px 2px rgba(0,0,0,0.6));
-          transition: background 0.3s, filter 0.3s, opacity 0.3s;
-        }
-        #hud .wind .hubDot {
-          position: absolute; left: 50%; top: 50%; width: 8px; height: 8px;
-          transform: translate(-50%,-50%); border-radius: 50%;
-          background: radial-gradient(circle at 35% 30%, #fff, #b8c6ee 60%, #6a7cb8);
-          box-shadow: 0 1px 3px rgba(0,0,0,0.7);
+          position: absolute; inset: 0; border-radius: 50%; pointer-events: none;
+          background: radial-gradient(circle at 32% 24%,
+            rgba(255,255,255,0.34), rgba(255,255,255,0.07) 36%, rgba(255,255,255,0) 60%);
         }
         #hud .windBadge {
-          margin-top: -12px; z-index: 1; min-width: 46px; text-align: center;
-          padding: 2px 12px 3px; border-radius: 999px;
-          background: linear-gradient(#ffe89a, #ffd75e 45%, #e0a52e 90%);
-          border: 2px solid #6b4a12;
-          box-shadow: inset 0 1px 0 rgba(255,255,255,0.7), 0 3px 8px rgba(0,0,0,0.5);
-          color: #402c05; font-weight: 900; font-size: 17px; line-height: 1.15;
-          text-shadow: 0 1px 0 rgba(255,255,255,0.45);
+          position: absolute; left: 50%; top: 50%; z-index: 1;
+          width: 34px; height: 34px; transform: translate(-50%,-50%);
+          display: flex; align-items: center; justify-content: center;
+          border-radius: 50%;
+          background: radial-gradient(circle at 50% 30%, #2e3c78, #1a2350 55%, #0d1230 95%);
+          border: 2px solid #e8b64a;
+          box-shadow: 0 0 0 1px #6b4a12, inset 0 2px 4px rgba(0,0,0,0.7),
+            inset 0 -1px 0 rgba(120,160,255,0.25), 0 2px 6px rgba(0,0,0,0.6);
+          color: var(--gold); font-weight: 800; font-size: 20px; line-height: 1;
+          text-shadow: 0 1px 0 #000, 0 0 6px rgba(0,0,0,0.8);
+          font-family: 'Baloo 2', 'Trebuchet MS', sans-serif;
         }
         #hud .windLabel {
-          margin-top: 3px; font-size: 10px; font-weight: 800; letter-spacing: 2px;
-          color: rgba(255,231,160,0.9); text-shadow: 0 1px 2px #000, 0 0 6px rgba(0,0,0,0.8);
+          font-size: 10px; font-weight: 800; letter-spacing: 2px;
+          color: rgba(255,231,160,0.95); text-shadow: 0 1px 2px #000;
         }
 
         /* ============ bottom console ============ */
         #hud .console {
-          position: absolute; bottom: 0; left: 50%; transform: translateX(-50%);
-          width: min(900px, 96vw);
-          padding: 12px 18px 14px;
-          border-radius: 18px 18px 0 0;
+          position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%);
+          width: min(940px, 96vw);
+          padding: 10px 18px 12px;
+          border-radius: 16px;
           background:
             linear-gradient(180deg, #4a5da6 0%, #2c3a6b 18%, #1d2750 60%, #131a38 100%);
-          border: 2px solid #e8b64a; border-bottom: none;
+          border: 2px solid #e8b64a;
           box-shadow:
             0 0 0 2px #6b4a12,
             inset 0 2px 0 rgba(255,255,255,0.35),
             inset 0 14px 22px rgba(120,150,255,0.12),
-            inset 0 -10px 18px rgba(0,0,0,0.45),
-            0 -8px 30px rgba(0,0,0,0.6);
+            inset 0 -8px 14px rgba(0,0,0,0.45),
+            0 6px 22px rgba(0,0,0,0.6);
         }
         #hud .console::before { /* top gloss strip */
-          content: ''; position: absolute; left: 10px; right: 10px; top: 3px; height: 12px;
+          content: ''; position: absolute; left: 10px; right: 10px; top: 3px; height: 11px;
           border-radius: 12px 12px 40px 40px;
           background: linear-gradient(rgba(255,255,255,0.28), rgba(255,255,255,0.02));
           pointer-events: none;
         }
-        #hud .row { display: flex; align-items: center; gap: 16px; }
+        #hud .row { display: flex; align-items: center; gap: 14px; }
+        #hud .miniLabel {
+          font-size: 10px; font-weight: 800; letter-spacing: 2.5px;
+          color: #ffe7a0; text-shadow: 0 1px 2px #000;
+        }
+
+        /* --- player identity (portrait + name) --- */
+        #hud .idBox { display: flex; flex-direction: column; align-items: center; gap: 3px; }
+        #hud .idFrame {
+          width: 54px; height: 54px; border-radius: 9px; overflow: hidden;
+          border: 2px solid #e8b64a;
+          box-shadow: 0 0 0 1px #6b4a12, inset 0 1px 0 rgba(255,255,255,0.4),
+            0 2px 6px rgba(0,0,0,0.55);
+          background: #27356d; line-height: 0;
+        }
+        #hud .idName { letter-spacing: 1.4px; }
 
         /* --- LED angle readout --- */
         #hud .angleBox {
@@ -121,6 +218,7 @@ export class UI {
           border: 2px solid #0a0f22; border-radius: 8px;
           box-shadow:
             inset 0 3px 8px rgba(0,0,0,0.9),
+            inset 0 1px 0 rgba(140,180,255,0.22),
             inset 0 -1px 0 rgba(120,160,255,0.15),
             0 1px 0 rgba(255,255,255,0.18);
           position: relative; overflow: hidden;
@@ -131,84 +229,170 @@ export class UI {
           pointer-events: none;
         }
         #hud .angle {
-          font-family: Consolas, 'Courier New', monospace;
-          font-size: 30px; font-weight: 700; line-height: 1.05;
+          font-family: 'Baloo 2', Consolas, monospace;
+          font-size: 29px; font-weight: 800; line-height: 1.1;
           color: #ffe27a;
           text-shadow: 0 0 8px rgba(255,190,60,0.85), 0 0 2px rgba(255,220,120,1);
         }
-        #hud .miniLabel {
-          font-size: 10px; font-weight: 800; letter-spacing: 2.5px;
-          color: #ffe7a0; text-shadow: 0 1px 2px #000;
+        #hud .anglePrev {
+          font-size: 10px; font-weight: 700; letter-spacing: 0.5px;
+          color: rgba(255,215,94,0.55); text-shadow: 0 1px 2px #000;
+          margin-left: 4px; opacity: 0; transition: opacity 0.3s;
         }
+        #hud .anglePrev.show { opacity: 1; }
 
         /* --- segmented power gauge --- */
         #hud .powerBox { flex: 1; display: flex; flex-direction: column; gap: 2px; }
         #hud .powerWrap {
-          position: relative; height: 34px; border-radius: 9px; padding: 4px;
-          background: linear-gradient(#060b1c, #0e1630 70%, #131c3e);
+          position: relative; height: 30px; border-radius: 9px; padding: 3px;
+          background: linear-gradient(#05081a, #0d1230 70%, #10173a);
           border: 2px solid #0a0f22;
           box-shadow:
             inset 0 4px 9px rgba(0,0,0,0.9),
             inset 0 -1px 0 rgba(120,160,255,0.14),
             0 1px 0 rgba(255,255,255,0.2);
-          overflow: hidden;
+          transition: box-shadow 0.15s;
         }
+        #hud .powerWrap.charging {
+          box-shadow:
+            inset 0 4px 9px rgba(0,0,0,0.9),
+            inset 0 -1px 0 rgba(120,160,255,0.14),
+            0 1px 0 rgba(255,255,255,0.2),
+            0 0 14px rgba(255,140,0,0.75), 0 0 26px rgba(255,110,0,0.35);
+        }
+        #hud .powerClip { position: absolute; inset: 3px; border-radius: 6px; overflow: hidden; }
         #hud .segRow { display: flex; gap: 2px; height: 100%; }
         #hud .seg {
-          flex: 1; border-radius: 3px;
-          background: linear-gradient(#161e3c, #0b1128);
-          box-shadow: inset 0 1px 1px rgba(0,0,0,0.7);
+          flex: 1; border-radius: 2px;
+          background: linear-gradient(#1b2348, #0d1230);
+          box-shadow: inset 0 1px 1px rgba(0,0,0,0.7), inset -1px 0 0 rgba(255,255,255,0.05);
           transform: skewX(-12deg);
           transition: background 0.05s;
           position: relative;
         }
         #hud .seg.on {
           background: linear-gradient(var(--seg-hi), var(--seg) 55%, var(--seg-lo));
-          box-shadow: 0 0 7px var(--seg-glow), inset 0 1px 0 rgba(255,255,255,0.65);
+          box-shadow: 0 0 8px var(--seg-glow), inset 0 1px 0 rgba(255,255,255,0.65),
+            inset -1px 0 0 rgba(255,255,255,0.18);
         }
+        /* previous shot rendered as a clearly-visible dimmed fill after firing */
+        #hud .seg.ghost {
+          background: linear-gradient(var(--seg-hi), var(--seg) 55%, var(--seg-lo));
+          filter: saturate(0.85) brightness(0.62);
+          box-shadow: inset 0 1px 0 rgba(255,255,255,0.35), inset -1px 0 0 rgba(255,255,255,0.14);
+        }
+        /* gold reference ticks at 25 / 50 / 75% */
+        #hud .powerTicks {
+          position: absolute; top: 2px; bottom: 2px; left: 4px; right: 4px;
+          pointer-events: none;
+          background: linear-gradient(90deg,
+            transparent 0 calc(25% - 1px), rgba(255,215,94,0.55) calc(25% - 1px) calc(25% + 1px),
+            transparent calc(25% + 1px) calc(50% - 1px), rgba(255,215,94,0.55) calc(50% - 1px) calc(50% + 1px),
+            transparent calc(50% + 1px) calc(75% - 1px), rgba(255,215,94,0.55) calc(75% - 1px) calc(75% + 1px),
+            transparent calc(75% + 1px));
+        }
+        /* bright pulsing leading edge while charging */
+        #hud .powerEdge {
+          position: absolute; top: 1px; bottom: 1px; width: 4px; margin-left: -2px;
+          border-radius: 2px; opacity: 0; pointer-events: none;
+          background: linear-gradient(#ffffff, #ffe27a 60%, #ffb23c);
+          box-shadow: 0 0 12px rgba(255,225,110,0.95), 0 0 4px #fff, 0 0 22px rgba(255,170,60,0.7);
+        }
+        #hud .powerEdge.on { opacity: 1; animation: edgePulse 0.32s ease-in-out infinite alternate; }
+        @keyframes edgePulse { from { filter: brightness(1); } to { filter: brightness(1.7); } }
         #hud .powerWrap .sheen {
-          position: absolute; left: 0; right: 0; top: 3px; height: 42%;
+          position: absolute; left: 3px; right: 3px; top: 3px; height: 42%;
           background: linear-gradient(rgba(255,255,255,0.30), rgba(255,255,255,0.02));
           border-radius: 6px 6px 0 0; pointer-events: none;
         }
+        /* white 'previous shot' marker with dark outline (GunBound staple) */
         #hud .powerLast {
           position: absolute; top: 1px; bottom: 1px; width: 3px; margin-left: -1px;
-          background: #fff; border-radius: 2px;
-          box-shadow: 0 0 6px rgba(255,255,255,0.95), 0 0 2px #fff;
+          background: #ffffff;
+          border-radius: 2px; opacity: 0; pointer-events: none;
+          box-shadow: 0 0 0 1px #101630, 0 0 7px rgba(255,255,255,0.85);
+          transition: opacity 0.3s;
         }
+        #hud .powerLast.show { opacity: 0.95; }
         #hud .powerLast::before {
           content: ''; position: absolute; top: -1px; left: 50%; transform: translateX(-50%);
-          border: 5px solid transparent; border-top: 6px solid #fff;
+          border: 5px solid transparent; border-top: 6px solid #ffd75e;
+          filter: drop-shadow(0 1px 0 #101630);
+        }
+
+        /* --- item slots (authentic console silhouette) --- */
+        #hud .slotsBox { display: flex; flex-direction: column; align-items: center; gap: 3px; }
+        #hud .slots { display: flex; gap: 6px; }
+        #hud .slot {
+          position: relative; width: 42px; height: 42px; border-radius: 8px;
+          background: linear-gradient(#0a0f26, #131b40 70%, #182252);
+          border: 2px solid #e8b64a;
+          box-shadow: 0 0 0 1px #6b4a12, inset 0 3px 6px rgba(0,0,0,0.85),
+            inset 0 -1px 0 rgba(120,160,255,0.18), 0 2px 5px rgba(0,0,0,0.5);
+          overflow: hidden;
+        }
+        #hud .slot::after { /* diagonal sheen */
+          content: ''; position: absolute; inset: -40% 60% 40% -60%;
+          transform: rotate(-24deg);
+          background: linear-gradient(rgba(255,255,255,0.16), rgba(255,255,255,0.01));
+        }
+        #hud .slot::before { /* faint empty-socket cross */
+          content: '+'; position: absolute; inset: 0;
+          display: flex; align-items: center; justify-content: center;
+          color: rgba(140,170,255,0.22); font-size: 20px; font-weight: 800;
         }
 
         /* --- circular timer --- */
         #hud .timerBox { display: flex; flex-direction: column; align-items: center; gap: 2px; }
         #hud .timerRing {
-          position: relative; width: 60px; height: 60px; border-radius: 50%;
+          position: relative; width: 58px; height: 58px; border-radius: 50%;
           background: conic-gradient(var(--gold) 0turn 1turn);
           box-shadow: 0 0 0 2px #6b4a12, 0 3px 10px rgba(0,0,0,0.6),
             inset 0 1px 0 rgba(255,255,255,0.4);
           display: flex; align-items: center; justify-content: center;
         }
+        #hud .timerRing::after { /* tick marks over the ring band */
+          content: ''; position: absolute; inset: 0; border-radius: 50%;
+          background: repeating-conic-gradient(from -1.5deg,
+            rgba(10,15,34,0.55) 0deg 3deg, transparent 3deg 30deg);
+          -webkit-mask: radial-gradient(circle, transparent 21px, #000 21.5px);
+          mask: radial-gradient(circle, transparent 21px, #000 21.5px);
+          pointer-events: none;
+        }
         #hud .timerFace {
-          width: 46px; height: 46px; border-radius: 50%;
+          width: 44px; height: 44px; border-radius: 50%;
           background: radial-gradient(circle at 50% 35%, #2c3a6b, #10162f 80%);
+          border: 1px solid #0a0f22;
           box-shadow: inset 0 3px 7px rgba(0,0,0,0.8);
           display: flex; align-items: center; justify-content: center;
         }
         #hud .timer {
-          font-size: 22px; font-weight: 900; color: #fff;
+          font-size: 21px; font-weight: 800; color: #fff;
           text-shadow: 0 0 6px rgba(120,170,255,0.7), 0 2px 2px #000;
         }
         #hud .timerRing.low .timer { color: #ff6b5e; text-shadow: 0 0 8px rgba(255,60,40,0.9), 0 2px 2px #000; }
         #hud .timerRing.low { animation: hudPulse 0.6s ease-in-out infinite; }
         @keyframes hudPulse { 50% { transform: scale(1.08); } }
 
+        /* --- chunky FIRE button --- */
+        #hud .fireBtn {
+          width: 60px; height: 60px; border-radius: 50%; flex: 0 0 60px;
+          display: flex; align-items: center; justify-content: center;
+          background: radial-gradient(circle at 50% 30%, #ffe9a0, #ffd76a 42%, #c8901e 92%);
+          border: 2px solid #4a3006;
+          box-shadow: 0 0 0 1px rgba(255,235,170,0.35),
+            inset 0 2px 0 rgba(255,255,255,0.65),
+            inset 0 -7px 10px rgba(120,70,10,0.5),
+            0 4px 10px rgba(0,0,0,0.55);
+          color: #402c05; font-weight: 800; font-size: 15px; letter-spacing: 1.2px;
+          text-shadow: 0 1px 0 rgba(255,255,255,0.5);
+        }
+
         /* ============ player cards ============ */
-        #hud .players { position: absolute; top: 14px; width: 288px; }
+        #hud .players { position: absolute; top: 14px; width: 300px; }
         #hud .players.left { left: 16px; } #hud .players.right { right: 16px; }
         #hud .pcard {
-          position: relative; margin-bottom: 10px; padding: 8px 12px 10px;
+          position: relative; margin-bottom: 10px; padding: 7px 10px 8px;
           border-radius: 12px;
           background: linear-gradient(180deg, #3b4d8f 0%, #232e5c 30%, #161e42 100%);
           border: 2px solid #e8b64a;
@@ -217,27 +401,38 @@ export class UI {
           transition: opacity 0.4s, filter 0.4s;
         }
         #hud .pcard.dead { opacity: 0.55; filter: saturate(0.25) brightness(0.8); }
-        #hud .pTop { display: flex; align-items: center; gap: 10px; }
+        #hud .pRow { display: flex; align-items: center; gap: 9px; }
+        #hud .players.right .pRow { flex-direction: row-reverse; }
+        #hud .portraitFrame {
+          flex: 0 0 46px; width: 46px; height: 46px; border-radius: 8px; overflow: hidden;
+          border: 2px solid #e8b64a;
+          box-shadow: 0 0 0 1px #6b4a12, inset 0 1px 0 rgba(255,255,255,0.4),
+            0 2px 6px rgba(0,0,0,0.55);
+          background: #27356d; line-height: 0;
+        }
+        #hud .pMain { flex: 1; min-width: 0; }
+        #hud .pTop { display: flex; align-items: center; gap: 8px; }
         #hud .players.right .pTop { flex-direction: row-reverse; }
+        /* faceted team gem: 4 conic facets + specular dot */
         #hud .avatar {
-          width: 26px; height: 26px; flex: 0 0 26px; transform: rotate(45deg);
-          border-radius: 6px; border: 2px solid #ffe89a;
-          box-shadow: 0 0 0 1px #6b4a12, 0 2px 5px rgba(0,0,0,0.6),
-            inset 0 6px 8px rgba(255,255,255,0.45), inset 0 -6px 8px rgba(0,0,0,0.35);
-          margin: 3px 4px;
+          width: 15px; height: 15px; flex: 0 0 15px; transform: rotate(45deg);
+          border-radius: 3px; border: 1.5px solid #141224;
+          box-shadow: 0 0 0 1px rgba(255,232,154,0.6), 0 1px 3px rgba(0,0,0,0.6);
+          margin: 2px 3px;
         }
         #hud .pname {
-          flex: 1; font-size: 16px; font-weight: 900; color: #fff; letter-spacing: 0.4px;
+          flex: 1; font-size: 16px; font-weight: 800; color: #fff; letter-spacing: 0.4px;
+          line-height: 1.2;
           text-shadow: 0 2px 0 rgba(0,0,0,0.75), 0 0 8px rgba(0,0,0,0.5);
           white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
         }
         #hud .players.right .pname { text-align: right; }
         #hud .hpnum {
-          font-size: 13px; font-weight: 900; color: var(--gold);
+          font-size: 14px; font-weight: 800; color: var(--gold); line-height: 1.2;
           text-shadow: 0 1px 0 #000, 0 0 6px rgba(0,0,0,0.7);
         }
         #hud .hpbar {
-          position: relative; height: 15px; border-radius: 8px; margin-top: 6px;
+          position: relative; height: 14px; border-radius: 8px; margin-top: 5px;
           background: linear-gradient(#080d1e, #101a3a);
           border: 2px solid #0a0f22;
           box-shadow: inset 0 3px 5px rgba(0,0,0,0.85), 0 1px 0 rgba(255,255,255,0.18);
@@ -245,7 +440,7 @@ export class UI {
         }
         #hud .hptrail {
           position: absolute; left: 0; top: 0; bottom: 0; width: 100%;
-          background: linear-gradient(#ff9a8a, #e03a2c 55%, #8f1d13);
+          background: linear-gradient(#c4574a, #7a1f1f 60%, #58120c);
           border-radius: 6px;
           transition: width 0.7s cubic-bezier(.2,.7,.3,1);
         }
@@ -258,19 +453,53 @@ export class UI {
         }
         #hud .hpfill.mid { background: linear-gradient(#fff0b0, #ffd75e 45%, #d59b1f 90%); }
         #hud .hpfill.crit { background: linear-gradient(#ffb3a8, #ff5b4d 45%, #c22619 90%); }
+        /* 25% segment ticks over the fill */
+        #hud .hpticks {
+          position: absolute; top: 1px; bottom: 1px; left: 0; right: 0;
+          pointer-events: none;
+          background: linear-gradient(90deg,
+            transparent 0 calc(25% - 1px), rgba(5,9,22,0.55) calc(25% - 1px) calc(25% + 1px),
+            transparent calc(25% + 1px) calc(50% - 1px), rgba(5,9,22,0.55) calc(50% - 1px) calc(50% + 1px),
+            transparent calc(50% + 1px) calc(75% - 1px), rgba(5,9,22,0.55) calc(75% - 1px) calc(75% + 1px),
+            transparent calc(75% + 1px));
+        }
         #hud .hpbar .sheen {
           position: absolute; left: 1px; right: 1px; top: 1px; height: 45%;
-          background: linear-gradient(rgba(255,255,255,0.35), rgba(255,255,255,0.02));
+          background: linear-gradient(rgba(255,255,255,0.5), rgba(255,255,255,0.04));
           border-radius: 6px 6px 0 0; pointer-events: none;
         }
 
         /* ============ turn banner ============ */
         #hud .banner {
-          position: absolute; top: 30%; left: 0; right: 0;
+          position: absolute; top: 27%; left: 0; right: 0;
           display: grid; justify-items: center; align-items: center;
           opacity: 0; pointer-events: none;
         }
         #hud .banner.show { opacity: 1; }
+        #hud .banner .bRibbon {
+          grid-area: 1 / 1; position: relative;
+          width: min(980px, 86vw); height: 78px; align-self: center; justify-self: center;
+          background: linear-gradient(90deg,
+            rgba(19,26,56,0) 0%, rgba(19,26,56,0.82) 22%,
+            rgba(19,26,56,0.82) 78%, rgba(19,26,56,0) 100%);
+          opacity: 0;
+        }
+        #hud .banner.show .bRibbon { animation: ribbonIn 0.35s ease-out both; }
+        @keyframes ribbonIn { from { opacity: 0; transform: scaleY(0.2); } to { opacity: 1; transform: scaleY(1); } }
+        #hud .banner .bRibbon::before, #hud .banner .bRibbon::after {
+          content: ''; position: absolute; left: 0; right: 0; height: 2px;
+          background: linear-gradient(90deg,
+            rgba(255,215,94,0) 0%, rgba(255,215,94,0.85) 25%,
+            rgba(255,215,94,0.85) 75%, rgba(255,215,94,0) 100%);
+        }
+        #hud .banner .bRibbon::before { top: 0; }
+        #hud .banner .bRibbon::after { bottom: 0; }
+        #hud .bInner { grid-area: 1 / 1; display: grid; z-index: 1; }
+        #hud .bInner > span {
+          grid-area: 1 / 1; font-size: 56px; font-weight: 800; letter-spacing: 1px;
+          text-align: center; white-space: nowrap; line-height: 1.25;
+          font-family: 'Baloo 2', 'Trebuchet MS', 'Segoe UI', Verdana, sans-serif;
+        }
         #hud .banner.show .bInner {
           animation: bannerPop 0.55s cubic-bezier(.28,1.65,.5,1) both;
         }
@@ -279,12 +508,6 @@ export class UI {
           60%  { transform: scale(1.18) rotate(1deg); opacity: 1; }
           80%  { transform: scale(0.96); }
           100% { transform: scale(1); opacity: 1; }
-        }
-        #hud .bInner { display: grid; }
-        #hud .bInner > span {
-          grid-area: 1 / 1; font-size: 56px; font-weight: 900; letter-spacing: 1px;
-          text-align: center; white-space: nowrap;
-          font-family: 'Trebuchet MS', 'Segoe UI', Verdana, sans-serif;
         }
         #hud .bStroke {
           color: #2b1a04; -webkit-text-stroke: 10px #2b1a04;
@@ -303,7 +526,8 @@ export class UI {
           animation: dmgFloat 1.1s cubic-bezier(.2,.8,.4,1) both;
         }
         #hud .dmg > span {
-          grid-area: 1 / 1; font-size: 46px; font-weight: 900; white-space: nowrap;
+          grid-area: 1 / 1; font-size: 46px; font-weight: 800; white-space: nowrap;
+          font-family: 'Baloo 2', 'Trebuchet MS', sans-serif;
         }
         #hud .dmg .dStroke {
           color: #3d0700; -webkit-text-stroke: 8px #3d0700;
@@ -322,66 +546,112 @@ export class UI {
           100% { transform: translate(-50%, -84px) scale(0.92); opacity: 0; }
         }
 
-        /* ============ help pill ============ */
+        /* ============ help pill (docked above console, fades after 1st shot) */
         #hud .help {
-          position: absolute; bottom: 108px; left: 50%; transform: translateX(-50%);
-          padding: 5px 16px 6px; border-radius: 999px;
-          background: rgba(10, 14, 32, 0.62);
-          border: 1px solid rgba(255, 215, 94, 0.35);
-          box-shadow: 0 3px 10px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.12);
-          color: rgba(230, 238, 255, 0.85); font-size: 12.5px; font-weight: 600;
+          position: absolute; bottom: calc(100% + 9px); left: 50%; transform: translateX(-50%);
+          display: flex; align-items: center; gap: 6px;
+          padding: 5px 14px 6px; border-radius: 999px;
+          background: linear-gradient(180deg, #26315f, #1a2352 55%, #131a38);
+          border: 1px solid #c9a227;
+          box-shadow: 0 0 0 1px rgba(60,40,6,0.8), 0 3px 10px rgba(0,0,0,0.5),
+            inset 0 1px 0 rgba(255,255,255,0.18);
+          color: #e6eeff; font-size: 12px; font-weight: 700;
           letter-spacing: 0.3px; text-shadow: 0 1px 2px #000; white-space: nowrap;
+          transition: opacity 0.5s, visibility 0.5s;
         }
-        #hud .help b { color: var(--gold); font-weight: 800; }
+        #hud .help.gone { opacity: 0; visibility: hidden; }
+        #hud .help .ht { color: #ffe7a0; margin-right: 2px; }
+        #hud .help .sep { width: 4px; height: 4px; border-radius: 50%;
+          background: rgba(255,215,94,0.55); margin: 0 4px; }
+        #hud .key {
+          display: inline-flex; align-items: center; justify-content: center;
+          min-width: 18px; height: 18px; padding: 0 4px; border-radius: 4px;
+          background: linear-gradient(#3b4a80, #1c2549 60%, #141b3d);
+          border: 1px solid #0a0f22;
+          box-shadow: inset 0 1px 0 rgba(255,255,255,0.3), 0 1px 0 rgba(0,0,0,0.8);
+          color: #fff; font-size: 11px; font-weight: 800; line-height: 1;
+        }
       </style>
 
       <div class="windWrap">
-        <div class="wind">
-          <div class="ticks"></div>
-          <div class="arrowWrap"><div class="arrow"></div></div>
-          <div class="hubDot"></div>
-          <div class="gloss"></div>
+        <div class="windPlate">
+          <div class="wind">
+            <svg class="windSvg" viewBox="0 0 100 100">
+              <g class="windTicks"></g>
+              <g class="needleG">
+                <polygon class="needleMain" points="46,36 94,50 46,64 54,50"
+                  fill="#9fd0ff" stroke="#101630" stroke-width="2.5" stroke-linejoin="round"/>
+                <polygon class="needleFin" points="8,37 25,50 8,63 15.5,50"
+                  fill="#9fd0ff" stroke="#101630" stroke-width="2.5" stroke-linejoin="round"/>
+              </g>
+            </svg>
+            <div class="gloss"></div>
+            <div class="windBadge">0</div>
+          </div>
+          <div class="windLabel">WIND</div>
         </div>
-        <div class="windBadge">0</div>
-        <div class="windLabel">WIND</div>
       </div>
 
       <div class="players left"></div>
       <div class="players right"></div>
 
-      <div class="banner"><div class="bInner"><span class="bStroke"></span><span class="bFill"></span></div></div>
+      <div class="banner">
+        <div class="bRibbon"></div>
+        <div class="bInner"><span class="bStroke"></span><span class="bFill"></span></div>
+      </div>
       <div class="dmgLayer"></div>
 
-      <div class="help"><b>&#8592; &#8594;</b> move &nbsp;&#183;&nbsp; <b>&#8593; &#8595;</b> aim &nbsp;&#183;&nbsp; hold <b>SPACE</b> for power, release to fire</div>
-
       <div class="console">
+        <div class="help">
+          <span class="key">&#8592;</span><span class="key">&#8594;</span><span class="ht">move</span>
+          <span class="sep"></span>
+          <span class="key">&#8593;</span><span class="key">&#8595;</span><span class="ht">aim</span>
+          <span class="sep"></span>
+          <span class="key">SPACE</span><span class="ht">hold for power &mdash; release to fire</span>
+        </div>
         <div class="row">
+          <div class="idBox">
+            <div class="idFrame"><canvas class="idPortrait"></canvas></div>
+            <div class="miniLabel idName">READY</div>
+          </div>
           <div class="angleBox">
             <div class="ledScreen"><div class="angle">45&#176;</div></div>
-            <div class="miniLabel">ANGLE</div>
+            <div class="miniLabel">ANGLE<span class="anglePrev"></span></div>
           </div>
           <div class="powerBox">
             <div class="powerWrap">
-              <div class="segRow"></div>
+              <div class="powerClip"><div class="segRow"></div></div>
+              <div class="powerTicks"></div>
               <div class="sheen"></div>
+              <div class="powerEdge"></div>
               <div class="powerLast" style="left:0%"></div>
             </div>
             <div class="miniLabel" style="text-align:center">POWER</div>
+          </div>
+          <div class="slotsBox">
+            <div class="slots"><div class="slot"></div><div class="slot"></div></div>
+            <div class="miniLabel">ITEMS</div>
           </div>
           <div class="timerBox">
             <div class="timerRing"><div class="timerFace"><div class="timer">20</div></div></div>
             <div class="miniLabel">TIME</div>
           </div>
+          <div class="fireBtn"><span>FIRE</span></div>
         </div>
       </div>`;
 
     this.el = {
-      windArrowWrap: root.querySelector('.wind .arrowWrap'),
-      windArrow: root.querySelector('.wind .arrow'),
+      windArrowWrap: root.querySelector('.windSvg .needleG'),
+      windArrow: root.querySelector('.needleMain'),
+      windFin: root.querySelector('.needleFin'),
       windVal: root.querySelector('.windBadge'),
+      windTicks: root.querySelector('.windTicks'),
       angle: root.querySelector('.angle'),
+      anglePrev: root.querySelector('.anglePrev'),
       segRow: root.querySelector('.segRow'),
+      powerWrap: root.querySelector('.powerWrap'),
       powerLast: root.querySelector('.powerLast'),
+      powerEdge: root.querySelector('.powerEdge'),
       timer: root.querySelector('.timer'),
       timerRing: root.querySelector('.timerRing'),
       banner: root.querySelector('.banner'),
@@ -390,51 +660,104 @@ export class UI {
       dmgLayer: root.querySelector('.dmgLayer'),
       playersLeft: root.querySelector('.players.left'),
       playersRight: root.querySelector('.players.right'),
+      help: root.querySelector('.help'),
+      idPortrait: root.querySelector('.idPortrait'),
+      idName: root.querySelector('.idName'),
     };
 
-    // Build power segments once; colors ramp green -> yellow -> red.
+    // 8 radial rim ticks on the wind dial.
+    {
+      let t = '';
+      for (let i = 0; i < 8; i++) {
+        const a = (i * Math.PI) / 4;
+        const c = Math.cos(a), s = Math.sin(a);
+        t += `<line x1="${(50 + c * 42).toFixed(1)}" y1="${(50 + s * 42).toFixed(1)}"
+          x2="${(50 + c * 46.5).toFixed(1)}" y2="${(50 + s * 46.5).toFixed(1)}"
+          stroke="rgba(255,215,94,0.45)" stroke-width="2.5" stroke-linecap="round"/>`;
+      }
+      this.el.windTicks.innerHTML = t;
+    }
+
+    // Build power segments once; colors ramp yellow -> orange -> red
+    // (GunBound-style hot gauge, readable from across the room).
     this.segs = [];
     for (let i = 0; i < SEGS; i++) {
       const s = document.createElement('div');
       s.className = 'seg';
       const t = i / (SEGS - 1);
-      const hue = 122 - t * 122;           // 122 (green) -> 0 (red)
-      s.style.setProperty('--seg', `hsl(${hue}, 88%, 52%)`);
-      s.style.setProperty('--seg-hi', `hsl(${hue}, 95%, 78%)`);
-      s.style.setProperty('--seg-lo', `hsl(${hue}, 90%, 32%)`);
-      s.style.setProperty('--seg-glow', `hsla(${hue}, 95%, 60%, 0.8)`);
+      const hue = 54 - t * 54;             // 54 (yellow) -> 0 (red)
+      s.style.setProperty('--seg', `hsl(${hue}, 96%, 54%)`);
+      s.style.setProperty('--seg-hi', `hsl(${hue}, 100%, 80%)`);
+      s.style.setProperty('--seg-lo', `hsl(${hue}, 92%, 34%)`);
+      s.style.setProperty('--seg-glow', `hsla(${hue}, 100%, 62%, 0.85)`);
       this.el.segRow.appendChild(s);
       this.segs.push(s);
     }
     this._lit = 0;
+    this._ghost = 0; // segments of the previous shot's ghost fill
     this._timerMax = 20;
     this._cards = new Map(); // name -> { card, fill, trail, num, avatar, trailPct, timer }
+    this._curAngle = 45;     // live angle (for the prev-shot ghost readout)
+    this._helpGone = false;  // one-shot: hint fades permanently after 1st fire
+    this._idSet = false;     // console identity portrait painted once
+    this._bRaf = 0;          // banner dismiss rAF handle
   }
 
   setWind(wind) {
-    // wind: signed, positive = blowing right.
+    // wind: signed, positive = blowing right. Tapered needle orbits the
+    // center badge; length + color scale with wind strength.
     const s = Math.abs(wind);
     this.el.windVal.textContent = s.toFixed(0);
-    const scale = 0.75 + Math.min(1, s / 9) * 0.45;
-    this.el.windArrowWrap.style.transform = `rotate(${wind >= 0 ? 0 : 180}deg) scale(${scale})`;
-    const color = s === 0 ? '#8fa2d4' : s < 3 ? '#cfe0ff' : s < 6 ? '#ffd75e' : '#ff7b4d';
-    const glow = s < 3 ? 'rgba(180,210,255,0.35)' : s < 6 ? 'rgba(255,215,94,0.75)' : 'rgba(255,110,60,0.9)';
-    this.el.windArrow.style.background = color;
-    this.el.windArrow.style.opacity = s === 0 ? 0.35 : 1;
-    this.el.windArrow.style.filter =
-      `drop-shadow(0 0 7px ${glow}) drop-shadow(0 2px 2px rgba(0,0,0,0.6))`;
+    const t = Math.min(1, s / 9);
+    const scale = s === 0 ? 0.7 : 0.85 + t * 0.28;
+    this.el.windArrowWrap.style.transform =
+      `rotate(${wind >= 0 ? 0 : 180}deg) scale(${scale})`;
+    this.el.windArrowWrap.style.opacity = s === 0 ? 0.35 : 1;
+    const col = s === 0 ? '#8fa2d4' : lerpColor('#9fd0ff', '#ff5533', t);
+    this.el.windArrow.setAttribute('fill', col);
+    this.el.windFin.setAttribute('fill', col);
   }
 
-  setAngle(a) { this.el.angle.innerHTML = `${Math.round(a)}&#176;`; }
+  setAngle(a) {
+    this._curAngle = a;
+    this.el.angle.innerHTML = `${Math.round(a)}&#176;`;
+  }
 
   setPower(p) {
     const lit = Math.round((p / 100) * SEGS);
+    // Pulsing leading edge + hot outer glow only while power is charged.
+    if (lit > 0) {
+      this.el.powerEdge.style.left = `${p}%`;
+      this.el.powerEdge.classList.add('on');
+      this.el.powerWrap.classList.add('charging');
+    } else {
+      this.el.powerEdge.classList.remove('on');
+      this.el.powerWrap.classList.remove('charging');
+    }
     if (lit === this._lit) return;
-    for (let i = 0; i < SEGS; i++) this.segs[i].classList.toggle('on', i < lit);
+    for (let i = 0; i < SEGS; i++) {
+      this.segs[i].classList.toggle('on', i < lit);
+      this.segs[i].classList.toggle('ghost', i >= lit && i < this._ghost);
+    }
     this._lit = lit;
   }
 
-  setLastPower(p) { this.el.powerLast.style.left = `${p}%`; }
+  setLastPower(p) {
+    // Previous shot's power: white marker + dimmed ghost fill (GunBound staple).
+    this._ghost = Math.round((p / 100) * SEGS);
+    for (let i = 0; i < SEGS; i++)
+      this.segs[i].classList.toggle('ghost', i >= this._lit && i < this._ghost);
+    this.el.powerLast.style.left = `${p}%`;
+    this.el.powerLast.classList.add('show');
+    // Prev-shot angle ghost readout under the LED screen.
+    this.el.anglePrev.innerHTML = `prev ${Math.round(this._curAngle)}&#176;`;
+    this.el.anglePrev.classList.add('show');
+    // A shot was fired: permanently retire the control hint (one-shot flag).
+    if (!this._helpGone) {
+      this._helpGone = true;
+      this.el.help.classList.add('gone');
+    }
+  }
 
   setTimer(t) {
     const v = Math.max(0, Math.ceil(t));
@@ -442,13 +765,16 @@ export class UI {
     this.el.timer.textContent = v;
     const frac = Math.max(0, Math.min(1, t / this._timerMax));
     this.el.timerRing.style.background =
-      `conic-gradient(${t <= 5 ? '#ff5b4d' : 'var(--gold)'} 0turn ${frac}turn, #3a3a52 ${frac}turn 1turn)`;
+      `conic-gradient(${t <= 5 ? '#ff5b4d' : 'var(--gold)'} 0turn ${frac}turn, #23283f ${frac}turn 1turn)`;
     this.el.timerRing.classList.toggle('low', t <= 5 && t > 0);
   }
 
   banner(text, ms = 1600) {
     // Damage-style payloads ("-12") get the floating damage treatment instead.
     if (/^-\d+$/.test(text)) { this.showDamage(text); return; }
+    // GunBound-style shouty banners: "You's turn" -> "YOUR TURN".
+    const m = /^(.+)'s turn$/i.exec(text);
+    if (m) text = m[1].toLowerCase() === 'you' ? 'YOUR TURN' : `${m[1].toUpperCase()}'S TURN`;
     this.el.bStroke.textContent = text;
     this.el.bFill.textContent = text;
     // retrigger pop animation
@@ -456,7 +782,18 @@ export class UI {
     void this.el.banner.offsetWidth;
     this.el.banner.classList.add('show');
     clearTimeout(this._bt);
-    if (ms > 0) this._bt = setTimeout(() => this.el.banner.classList.remove('show'), ms);
+    cancelAnimationFrame(this._bRaf);
+    if (ms > 0) {
+      // Dismiss after N *frames* (60fps equivalent) rather than wall-clock ms
+      // so slow/fixed-dt rendering keeps banner timing in sync with the game.
+      const frames = Math.max(1, Math.round((ms / 1000) * 60));
+      let n = 0;
+      const step = () => {
+        if (++n >= frames) this.el.banner.classList.remove('show');
+        else this._bRaf = requestAnimationFrame(step);
+      };
+      this._bRaf = requestAnimationFrame(step);
+    }
   }
 
   showDamage(amountText) {
@@ -475,6 +812,13 @@ export class UI {
   }
 
   renderPlayers(mobiles) {
+    // Console identity: the local player's portrait + mobile name (once).
+    if (!this._idSet && mobiles.length) {
+      const me = mobiles.find((m) => !m.isAI) ?? mobiles[0];
+      paintPortrait(this.el.idPortrait, me.typeKey, me.type, 50);
+      this.el.idName.textContent = (me.type.name || me.name).toUpperCase();
+      this._idSet = true;
+    }
     for (const m of mobiles) {
       let c = this._cards.get(m.name);
       if (!c) c = this._makeCard(m);
@@ -500,19 +844,31 @@ export class UI {
     const card = document.createElement('div');
     card.className = 'pcard';
     card.innerHTML = `
-      <div class="pTop">
-        <div class="avatar"></div>
-        <div class="pname"></div>
-        <div class="hpnum"></div>
-      </div>
-      <div class="hpbar">
-        <div class="hptrail"></div>
-        <div class="hpfill"></div>
-        <div class="sheen"></div>
+      <div class="pRow">
+        <div class="portraitFrame"><canvas></canvas></div>
+        <div class="pMain">
+          <div class="pTop">
+            <div class="avatar"></div>
+            <div class="pname"></div>
+            <div class="hpnum"></div>
+          </div>
+          <div class="hpbar">
+            <div class="hptrail"></div>
+            <div class="hpfill"></div>
+            <div class="hpticks"></div>
+            <div class="sheen"></div>
+          </div>
+        </div>
       </div>`;
+    paintPortrait(card.querySelector('.portraitFrame canvas'), m.typeKey, m.type, 42);
+    // Faceted team gem: 4 conic facets in the mobile's color + specular dot.
     const avatar = card.querySelector('.avatar');
+    const body = m.type.body;
     avatar.style.background =
-      `linear-gradient(135deg, ${m.type.body}, #0e1226 160%)`;
+      `radial-gradient(circle at 30% 28%, rgba(255,255,255,0.95) 0 1.5px, rgba(255,255,255,0) 3px), ` +
+      `conic-gradient(from 45deg, ` +
+      `color-mix(in srgb, ${body} 55%, #fff) 0 25%, ${body} 0 50%, ` +
+      `color-mix(in srgb, ${body} 55%, #000) 0 75%, color-mix(in srgb, ${body} 80%, #000) 0)`;
     const c = {
       card,
       name: card.querySelector('.pname'),

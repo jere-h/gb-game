@@ -14,7 +14,9 @@ import * as THREE from 'three';
 import { clamp, rad } from './util.js';
 
 export const MOBILE_TYPES = {
-  boomer: { body: '#4f8ef7', accent: '#2c56a8', hp: 100, minAngle: 20, maxAngle: 70, name: 'Boomer' },
+  // Boomer is cyan-teal (NOT royal blue) so it separates from the blue sky
+  // and blue parallax mountains behind it.
+  boomer: { body: '#3cc2ee', accent: '#1d5f94', hp: 100, minAngle: 20, maxAngle: 70, name: 'Boomer' },
   raider: { body: '#f75f4f', accent: '#a83a2c', hp: 100, minAngle: 15, maxAngle: 75, name: 'Raider' },
 };
 
@@ -63,7 +65,7 @@ function shadowShared() {
   if (_shadowShared) return _shadowShared;
   _shadowShared = {
     circle: new THREE.CircleGeometry(1, 28),
-    mats: [0.3, 0.22, 0.16].map((opacity) => new THREE.MeshBasicMaterial({
+    mats: [0.34, 0.26, 0.19].map((opacity) => new THREE.MeshBasicMaterial({
       color: '#0a0e1c', transparent: true, opacity, depthWrite: false,
     })),
   };
@@ -103,6 +105,9 @@ export class Mobile {
     this.radius = 26;
 
     this.group = new THREE.Group();
+    // YXZ: ground tilt (Z) applies first in local space, then the billboard
+    // yaw/pitch (Y, X) that keeps the mobile presented flat to the camera.
+    this.group.rotation.order = 'YXZ';
     this.buildModel();
     scene.add(this.group);
     this.syncTransform();
@@ -153,19 +158,21 @@ export class Mobile {
     this.group.add(this.bodyGroup);
 
     // Soft blob shadow hugging the ground (does not bob with the body).
+    // Kept only slightly wider than the track footprint and squashed flat so
+    // it reads as a contact shadow directly beneath the treads, not a smear.
     const { circle, mats } = shadowShared();
     const shadow = new THREE.Group();
-    const baseW = this.typeKey === 'raider' ? 62 : 60;
+    const baseW = this.typeKey === 'raider' ? 38 : 34;
     [[0.55, 0], [0.8, 0.2], [1, 0.4]].forEach(([s, dz], i) => {
       const layer = new THREE.Mesh(circle, mats[i]);
-      layer.scale.set(baseW * s, 15 * s, 1);
+      layer.scale.set(baseW * s, 8 * s, 1);
       layer.position.z = dz;
       // Terrain is a transparent alpha-tested plane at renderOrder 5 — the
       // shadow must draw after it or the terrain repaints over it.
       layer.renderOrder = 6;
       shadow.add(layer);
     });
-    shadow.position.set(0, 1.5, -14);
+    shadow.position.set(0, 0.5, -14);
     this.group.add(shadow);
     this.shadow = shadow;
 
@@ -194,34 +201,49 @@ export class Mobile {
   buildBoomer() {
     const g = this.bodyGroup;
     const blue = this.toon(this.type.body);
-    const blueLite = this.toon('#8fc2ff');
+    const blueLite = this.toon('#93ecff');
     const navy = this.toon(this.type.accent);
     const cream = this.toon('#eef3fb');
     const steel = this.toon('#9aa7bd');
     const gun = this.toon('#3c4a68');
-    const glass = this.toon('#141b2c');
     const bulb = new THREE.MeshBasicMaterial({ color: '#ffd23f' });
     const glintM = new THREE.MeshBasicMaterial({ color: '#ffffff' });
     const boreM = new THREE.MeshBasicMaterial({ color: '#0c0f18' });
+    // Constant-brightness materials for face + rim light so they always pop
+    // at game zoom regardless of scene lighting.
+    const scleraM = new THREE.MeshBasicMaterial({ color: '#f6fbff' });
+    const pupilM = new THREE.MeshBasicMaterial({ color: '#122036' });
+    const rimLightM = new THREE.MeshBasicMaterial({ color: '#cfe8ff' });
+    const barrelLiteM = new THREE.MeshBasicMaterial({ color: '#b9c9de' });
 
     // Belly / chassis
     const belly = this.part(g, new THREE.CapsuleGeometry(12, 26, 6, 14), cream, 2, 13, 0,
       { rz: Math.PI / 2, sx: 1.1, sy: 0.8, sz: 1 });
-    this.outline(belly, 2.2);
+    this.outline(belly, 2.8);
 
     // Stubby feet
     const footGeo = new THREE.SphereGeometry(8, 14, 10);
     const f1 = this.part(g, footGeo, navy, 13, 4.5, 5, { sx: 1.25, sy: 0.62, sz: 0.9 });
     const f2 = this.part(g, footGeo, navy, -19, 4.5, 5, { sx: 1.25, sy: 0.62, sz: 0.9 });
-    this.outline(f1, 1.8); this.outline(f2, 1.8);
+    this.outline(f1, 2.2); this.outline(f2, 2.2);
 
-    // Shell dome + flared skirt rim
+    // Shell dome + flared skirt rim (thick near-black outline so the
+    // silhouette never dissolves into the sky)
     const shell = this.part(g, new THREE.SphereGeometry(26, 28, 20), blue, -2, 27, 0,
       { sx: 1.12, sy: 0.9, sz: 1 });
-    this.outline(shell, 2.6);
+    this.outline(shell, 3.4);
     const rim = this.part(g, new THREE.CylinderGeometry(27, 29.5, 6.5, 26), navy, -2, 15.5, 0,
       { sx: 1.15, sy: 1, sz: 1 });
-    this.outline(rim, 1.8);
+    this.outline(rim, 2.4);
+
+    // Warm rim-light crescents hugging the top-left silhouette edge of the
+    // dome — they straddle the outline so the shell separates from the sky
+    // even where hues get close. Placed just proud of the surface (small z)
+    // right at the ellipse edge so they actually show.
+    this.part(g, new THREE.SphereGeometry(5.5, 12, 10), rimLightM, -22.6, 43.5, 6,
+      { sx: 1.8, sy: 0.4, sz: 0.5, rz: 0.68 });
+    this.part(g, new THREE.SphereGeometry(4.2, 10, 8), rimLightM, -11.5, 48.5, 6,
+      { sx: 1.5, sy: 0.38, sz: 0.5, rz: 0.28 });
 
     // Shell spots (lighter bumps on the camera side)
     const spotGeo = new THREE.SphereGeometry(4.5, 10, 8);
@@ -231,27 +253,35 @@ export class Mobile {
 
     // Top hatch + antenna with glowing bobble
     const hatch = this.part(g, new THREE.SphereGeometry(6.5, 14, 10), navy, -6, 47, 0);
-    this.outline(hatch, 1.5);
+    this.outline(hatch, 1.8);
     this.part(g, new THREE.CylinderGeometry(1.3, 1.3, 13, 8), steel, -10, 52, 0);
     this.part(g, new THREE.SphereGeometry(3, 10, 8), bulb, -10, 60, 0);
 
-    // Head poking out from under the shell brim + glossy visor eye + glint
+    // Head poking out from under the shell brim, with a big cartoon eye
+    // (white sclera + dark pupil + glint) and a little mouth line so the
+    // mobile has a face that reads at game zoom.
     const head = this.part(g, new THREE.SphereGeometry(10.5, 18, 14), blue, 30, 16, 4,
       { sx: 1.15, sy: 0.9, sz: 0.95 });
-    this.outline(head, 2);
-    const visor = this.part(g, new THREE.SphereGeometry(8, 16, 12), glass, 35.5, 17.5, 4,
-      { sx: 0.85, sy: 0.72, sz: 0.9 });
-    this.outline(visor, 1.3);
-    this.part(g, new THREE.SphereGeometry(2, 8, 6), glintM, 38.5, 20, 7);
+    this.outline(head, 2.8);
+    const eye = this.part(g, new THREE.SphereGeometry(6, 14, 12), scleraM, 33.5, 18.5, 12.5,
+      { sx: 0.95, sy: 1.12, sz: 0.5 });
+    this.outline(eye, 1.5);
+    this.part(g, new THREE.SphereGeometry(2.7, 10, 8), pupilM, 35, 18, 15.2,
+      { sx: 0.95, sy: 1.15, sz: 0.45 });
+    this.part(g, new THREE.SphereGeometry(1.2, 8, 6), glintM, 36.4, 20.4, 16.2);
+    // Mouth: thin dark smile line on the lower front of the head
+    this.part(g, new THREE.BoxGeometry(5.4, 1.3, 1.2), pupilM, 33.8, 11.2, 12.6, { rz: -0.18 });
 
     // Rear booster pod
     const pod = this.part(g, new THREE.CylinderGeometry(6, 6, 13, 14), steel, -28, 18, 8,
       { rz: Math.PI / 2 });
-    this.outline(pod, 1.6);
+    this.outline(pod, 1.8);
     this.part(g, new THREE.CylinderGeometry(7, 7, 4, 14), navy, -34.5, 18, 8, { rz: Math.PI / 2 });
     this.part(g, new THREE.CylinderGeometry(5, 5, 1.2, 12), boreM, -36.8, 18, 8, { rz: Math.PI / 2 });
 
-    // Cannon (barrelPivot is the aim joint; barrelGroup takes recoil offset)
+    // Cannon (barrelPivot is the aim joint; barrelGroup takes recoil offset).
+    // Chunkier than before: fatter tube, bright top edge stripe, big flared
+    // muzzle with a dark bore so aim direction reads at game zoom.
     this.barrelPivot = new THREE.Group();
     this.barrelPivot.position.set(0, 30, 0);
     g.add(this.barrelPivot);
@@ -259,16 +289,19 @@ export class Mobile {
     this.barrelPivot.add(this.barrelGroup);
     const bg = this.barrelGroup;
 
-    this.part(bg, new THREE.SphereGeometry(7, 12, 10), gun, 0, 0, 0);
-    const barrel = this.part(bg, new THREE.CylinderGeometry(4.6, 6, 34, 14), gun, 20, 0, 0,
+    this.part(bg, new THREE.SphereGeometry(8.5, 12, 10), gun, 0, 0, 0);
+    const barrel = this.part(bg, new THREE.CylinderGeometry(5.8, 7.2, 34, 14), gun, 20, 0, 0,
       { rz: -Math.PI / 2 });
-    this.outline(barrel, 2);
-    this.part(bg, new THREE.CylinderGeometry(6.3, 6.3, 4.5, 14), steel, 30, 0, 0, { rz: -Math.PI / 2 });
-    const muzzle = this.part(bg, new THREE.CylinderGeometry(7.4, 6.6, 10, 14), navy, 43.5, 0, 0,
+    this.outline(barrel, 2.6);
+    // Light catch along the top edge of the tube
+    this.part(bg, new THREE.CylinderGeometry(1.5, 1.5, 26, 8), barrelLiteM, 19, 5.2, 1.5,
       { rz: -Math.PI / 2 });
-    this.outline(muzzle, 1.8);
-    this.part(bg, new THREE.TorusGeometry(7.4, 1.8, 10, 20), steel, 48.5, 0, 0, { ry: Math.PI / 2 });
-    this.part(bg, new THREE.CylinderGeometry(5.4, 5.4, 1.6, 12), boreM, 48.9, 0, 0, { rz: -Math.PI / 2 });
+    this.part(bg, new THREE.CylinderGeometry(7.8, 7.8, 4.5, 14), steel, 30, 0, 0, { rz: -Math.PI / 2 });
+    const muzzle = this.part(bg, new THREE.CylinderGeometry(8.6, 7.6, 11, 14), navy, 44, 0, 0,
+      { rz: -Math.PI / 2 });
+    this.outline(muzzle, 2.2);
+    this.part(bg, new THREE.TorusGeometry(8.6, 2, 10, 20), steel, 49.5, 0, 0, { ry: Math.PI / 2 });
+    this.part(bg, new THREE.CylinderGeometry(6.4, 6.4, 1.8, 12), boreM, 50, 0, 0, { rz: -Math.PI / 2 });
   }
 
   // Raider: aggressive red wedge tank. Angular extruded hull, layered armor
@@ -291,8 +324,19 @@ export class Mobile {
     this.outline(t1, 2.2); this.outline(t2, 2.2);
     const spikeGeo = new THREE.ConeGeometry(2.8, 6, 6);
     for (const sx of [-18, -6, 6, 18]) this.part(g, spikeGeo, tread, sx, 0.5, 11, { rz: Math.PI });
-    const hubGeo = new THREE.CylinderGeometry(5.5, 5.5, 2.5, 12);
-    for (const hx of [-15, 0, 15]) this.part(g, hubGeo, gun, hx, 8.5, 19.5, { rx: Math.PI / 2 });
+    // Big readable road wheels sitting ON the track band: light-gray hubcaps
+    // with dark caps, sized up so they read at game zoom instead of vanishing
+    // into the tread shadow.
+    const hubSteel = this.toon('#c7d0e2');
+    const hubGeo = new THREE.CylinderGeometry(7.5, 7.5, 3, 16);
+    const capGeo = new THREE.CylinderGeometry(3.4, 3.4, 1.6, 10);
+    for (const hx of [-16, 0, 16]) {
+      const hub = this.part(g, hubGeo, hubSteel, hx, 8.5, 19.5, { rx: Math.PI / 2 });
+      this.outline(hub, 1.6);
+      this.part(g, capGeo, gun, hx, 8.5, 21.2, { rx: Math.PI / 2 });
+    }
+    // Dark tread line connecting the wheels along the track band
+    this.part(g, new THREE.BoxGeometry(42, 2.2, 1.6), tread, 0, 8.5, 20.2);
 
     // Angular wedge hull (extruded profile, chamfered edges)
     const shape = new THREE.Shape();
@@ -343,14 +387,15 @@ export class Mobile {
     this.barrelPivot.add(this.barrelGroup);
     const bg = this.barrelGroup;
 
-    this.part(bg, new THREE.SphereGeometry(7, 12, 10), gun, 0, 0, 0);
-    const barrel = this.part(bg, new THREE.CylinderGeometry(4.4, 5.8, 36, 6), gunFlat, 21, 0, 0,
+    // Barrel thinned ~20% so the turret mass stops competing with the hull.
+    this.part(bg, new THREE.SphereGeometry(6.4, 12, 10), gun, 0, 0, 0);
+    const barrel = this.part(bg, new THREE.CylinderGeometry(3.5, 4.6, 36, 6), gunFlat, 21, 0, 0,
       { rz: -Math.PI / 2 });
     this.outline(barrel, 2);
-    const brake = this.part(bg, new THREE.CylinderGeometry(7.8, 6.4, 11, 6), redDark, 44, 0, 0,
+    const brake = this.part(bg, new THREE.CylinderGeometry(6.4, 5.2, 10, 6), redDark, 44, 0, 0,
       { rz: -Math.PI / 2 });
     this.outline(brake, 1.8);
-    this.part(bg, new THREE.CylinderGeometry(5.2, 5.2, 1.6, 6), boreM, 49, 0, 0, { rz: -Math.PI / 2 });
+    this.part(bg, new THREE.CylinderGeometry(4.2, 4.2, 1.6, 6), boreM, 48.5, 0, 0, { rz: -Math.PI / 2 });
   }
 
   // --- gameplay API (contract used by game.js / main.js) ---------------------
@@ -398,10 +443,29 @@ export class Mobile {
   }
 
   syncTransform() {
-    this.groundAngle = this.terrain.surfaceAngle(this.x);
+    // Chord across the whole track footprint (not the point derivative) so the
+    // tread baseline follows the ground the mobile actually spans.
+    this.groundAngle = this.terrain.surfaceAngle(this.x, 20);
     this.group.position.set(this.x, this.y, 20);
     this.group.rotation.z = this.groundAngle;
     this.group.scale.x = this.facing;
+
+    // Billboard toward the camera: the world is flat art on the z=0 plane, but
+    // the mobiles are 3D meshes — off-center, a fixed-orientation mesh shows
+    // its top/rear faces (pseudo-isometric skew), shears the barrel off the
+    // hull and pushes wheels out of the silhouette. Yaw/pitch the group so it
+    // always presents its flat side view, like a sprite. Rotation order is
+    // YXZ, so the ground tilt (Z) stays within the billboarded plane.
+    const cam = (typeof window !== 'undefined' && window.__GB && window.__GB.world)
+      ? window.__GB.world.camera : null;
+    if (cam) {
+      const vx = cam.position.x - this.x;
+      const vy = cam.position.y - this.y;
+      const vz = cam.position.z - this.group.position.z;
+      const len = Math.hypot(vx, vy, vz) || 1;
+      this.group.rotation.y = Math.atan2(vx, vz);
+      this.group.rotation.x = -Math.asin(clamp(vy / len, -1, 1));
+    }
 
     // Idle life + recoil (main.js calls syncTransform every frame).
     const t = performance.now() / 1000;
@@ -411,7 +475,11 @@ export class Mobile {
     const kick = this.recoilT * this.recoilT;
 
     const breathe = Math.sin(t * 2.0 + this.phase);
-    this.bodyGroup.position.y = -1 + breathe * 0.9 - kick * 1.5;
+    // Base offset sinks the tracks into the grass fringe so the mobile reads
+    // planted on the ground instead of hovering above it. The raider sinks
+    // deeper so its (now larger) wheels overlap the grass line.
+    const sink = this.typeKey === 'raider' ? -4.5 : -2.5;
+    this.bodyGroup.position.y = sink + breathe * 0.9 - kick * 1.5;
     this.bodyGroup.position.x = -kick * 5;
     this.bodyGroup.rotation.z = breathe * 0.012 + kick * 0.05;
 

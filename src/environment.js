@@ -93,11 +93,12 @@ export class Environment {
           col += cWarm * exp(-abs(y - 140.0) * 0.0038) * 0.4 * sunSide;
           // Soft wide halo around the sun itself (bloom pass amplifies).
           float d = length(vW.xy - uSun);
-          col += cWarm * exp(-d / 420.0) * 0.3;
+          col += cWarm * exp(-d / 300.0) * 0.22;
           gl_FragColor = vec4(col, 1.0);
         }`,
       depthWrite: false,
     });
+    this.skyMat = mat; // uSun is re-aimed every frame to track the sun sprite
     const sky = new THREE.Mesh(geo, mat);
     sky.position.set(0, 600, -1500); // spans y in [-1400, 2600]
     sky.renderOrder = -10;
@@ -105,30 +106,92 @@ export class Environment {
   }
 
   buildSun() {
+    // Warm painted sun: soft gold halo, 8 faint rays, warm-white core — one
+    // sprite so clouds (drawn later) always occlude disc + halo together.
+    // Normal blending keeps it from nuking to pure white over the sky, which
+    // also tames how hard the bloom pass grabs it.
     const c = document.createElement('canvas');
     c.width = c.height = 256;
     const ctx = c.getContext('2d');
-    const g = ctx.createRadialGradient(128, 128, 0, 128, 128, 128);
-    g.addColorStop(0.0, 'rgba(255,255,248,1)');
-    g.addColorStop(0.18, 'rgba(255,252,225,1)');
-    g.addColorStop(0.26, 'rgba(255,238,175,0.75)');
-    g.addColorStop(0.45, 'rgba(255,214,130,0.28)');
-    g.addColorStop(0.75, 'rgba(255,190,110,0.08)');
-    g.addColorStop(1.0, 'rgba(255,180,100,0)');
+
+    // Wide halo.
+    let g = ctx.createRadialGradient(128, 128, 0, 128, 128, 126);
+    g.addColorStop(0.0, 'rgba(255,232,168,0.62)');
+    g.addColorStop(0.35, 'rgba(255,210,122,0.26)');
+    g.addColorStop(0.7, 'rgba(255,204,116,0.09)');
+    g.addColorStop(1.0, 'rgba(255,200,110,0)');
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, 256, 256);
+
+    // Eight soft tapered rays, alternating long/short.
+    ctx.save();
+    ctx.translate(128, 128);
+    for (let i = 0; i < 8; i++) {
+      ctx.rotate(Math.PI / 4);
+      const len = i % 2 === 0 ? 108 : 78;
+      const rg = ctx.createLinearGradient(0, 0, len, 0);
+      rg.addColorStop(0, 'rgba(255,228,150,0.28)');
+      rg.addColorStop(1, 'rgba(255,228,150,0)');
+      ctx.fillStyle = rg;
+      ctx.beginPath();
+      ctx.moveTo(24, 0);
+      ctx.lineTo(len, -4.5);
+      ctx.lineTo(len, 4.5);
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.restore();
+
+    // Core disc: warm white center, gold rim, quick soft falloff.
+    g = ctx.createRadialGradient(128, 128, 0, 128, 128, 80);
+    g.addColorStop(0.0, 'rgba(255,244,214,1)');
+    g.addColorStop(0.3, 'rgba(255,242,200,1)');
+    g.addColorStop(0.38, 'rgba(255,230,168,0.85)');
+    g.addColorStop(0.52, 'rgba(255,214,128,0.3)');
+    g.addColorStop(0.75, 'rgba(255,208,120,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, 256, 256);
+
     const tex = new THREE.CanvasTexture(c);
     tex.colorSpace = THREE.SRGBColorSpace;
     this.sun = new THREE.Mesh(
-      new THREE.PlaneGeometry(380, 380),
-      new THREE.MeshBasicMaterial({
-        map: tex, transparent: true, depthWrite: false,
-        blending: THREE.AdditiveBlending,
-      })
+      new THREE.PlaneGeometry(300, 300),
+      new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false })
     );
-    this.sun.position.set(760, 1040, -1400);
+    // Anchored near-fixed in screen space every frame (see _placeSun); this is
+    // just the resting spot before the first camera update.
+    this.sun.position.set(620, 760, -1400);
     this.sun.renderOrder = -9;
     this.group.add(this.sun);
+  }
+
+  // Keep the sun near-fixed in screen space (a distant light source, not a
+  // world prop): each frame it is re-anchored at a fixed NDC spot in a safe
+  // zone — clear of both HUD panels, the wind dial, and (at match-start
+  // framing) the floating islands — with a tiny 5% parallax drift.
+  _placeSun(cam) {
+    const zs = -1400;
+    const dist = cam.position.z - zs;
+    const tanH = Math.tan((cam.fov * Math.PI) / 360);
+    const aspect = cam.aspect || 16 / 9;
+    // Base spot: ~71% across, ~29% down from the top — clear of the HUD
+    // panels, the wind dial, and the match-start floating islands.
+    const nx = 0.42 - 0.05 * (cam.position.x / (tanH * aspect * dist));
+    const ny = 0.42 - 0.05 * ((cam.position.y - 420) / (tanH * dist));
+    this.sun.position.set(
+      cam.position.x + nx * tanH * aspect * dist,
+      cam.position.y + ny * tanH * dist,
+      zs
+    );
+    if (this.skyMat) {
+      // Aim the sky-shader halo at the same screen spot, projected onto the
+      // sky plane (z=-1500) so glow and disc stay concentric.
+      const sd = cam.position.z + 1500;
+      this.skyMat.uniforms.uSun.value.set(
+        cam.position.x + nx * tanH * aspect * sd,
+        cam.position.y + ny * tanH * sd
+      );
+    }
   }
 
   // --- mountains -------------------------------------------------------------
@@ -264,32 +327,52 @@ export class Environment {
   }
 
   paintForest(ctx, ridgeY, toCy, L, rng) {
-    // Dense treeline hugging the ridge — reads as forest cover, not scree.
-    ctx.fillStyle = 'rgba(21,45,74,0.55)';
-    for (let x = 0; x <= 2048; x += 5) {
-      const depth = 4 + rng() * 26;
-      const r = 3 + rng() * 6;
+    // A handful of treeline silhouette clusters sitting only on ridge crests —
+    // each is one filled path of overlapping bumpy canopy arcs, tinted to the
+    // layer's atmospheric blue (~15% darker). No scattered stamps.
+    const CW = 2048;
+    // Find crest candidates: local maxima with some prominence.
+    const crests = [];
+    for (let x = 70; x <= CW - 70; x += 4) {
+      if (ridgeY[x] >= ridgeY[x - 48] && ridgeY[x] >= ridgeY[x + 48] &&
+          ridgeY[x] > L.base + L.amp * 0.3) {
+        crests.push(x);
+      }
+    }
+    // Greedy pick with wide spacing so clusters never tile.
+    const picked = [];
+    for (const x of crests) {
+      if (picked.every((p) => Math.abs(p - x) > 300)) picked.push(x);
+      if (picked.length >= 6) break;
+    }
+    ctx.fillStyle = 'rgba(52, 90, 134, 0.9)'; // #3f6da0 hill blue, ~15% darker
+    for (const cx of picked) {
+      const s = 0.7 + rng() * 0.9; // scale 0.7..1.6
+      const bumps = 3 + ((rng() * 3) | 0);
+      const spread = (26 + bumps * 16) * s;
+      // One path: baseline hugging the ridge, canopy arcs bulging up.
       ctx.beginPath();
-      ctx.arc(x + (rng() - 0.5) * 4, toCy(ridgeY[x] - depth), r, Math.PI, 0);
+      const yb = (bx) => toCy(ridgeY[Math.max(0, Math.min(CW, Math.round(bx)))]) + 5 * s;
+      ctx.moveTo(cx - spread, yb(cx - spread));
+      for (let i = 0; i < bumps; i++) {
+        const f = bumps === 1 ? 0.5 : i / (bumps - 1);
+        const bx = cx + (f - 0.5) * spread * 1.7;
+        const hump = Math.sin(f * Math.PI); // taller toward cluster middle
+        const r = (11 + rng() * 8 + hump * 10) * s;
+        ctx.arc(bx, yb(bx) + 2, r, Math.PI, 0);
+      }
+      ctx.lineTo(cx + spread, yb(cx + spread));
+      ctx.closePath();
       ctx.fill();
     }
-    // Looser clumps trailing further down the slopes.
-    ctx.fillStyle = 'rgba(21,45,74,0.32)';
-    for (let x = 0; x <= 2048; x += 9) {
-      const depth = 30 + rng() * 80;
-      const r = 3 + rng() * 7;
+    // Faint sunlit rim on each cluster's crown, sun side (+x).
+    ctx.strokeStyle = 'rgba(150, 195, 220, 0.28)';
+    ctx.lineWidth = 1.5;
+    for (const cx of picked) {
+      const y = toCy(ridgeY[Math.max(0, Math.min(CW, cx))]);
       ctx.beginPath();
-      ctx.arc(x + (rng() - 0.5) * 8, toCy(ridgeY[x] - depth), r, Math.PI, 0);
-      ctx.fill();
-    }
-    // Sunlit canopy specks on the bright side of the treeline.
-    ctx.fillStyle = 'rgba(170,215,205,0.3)';
-    for (let x = 0; x <= 2048; x += 18) {
-      const depth = 6 + rng() * 34;
-      const r = 3 + rng() * 4;
-      ctx.beginPath();
-      ctx.arc(x + rng() * 8, toCy(ridgeY[x] - depth), r, Math.PI, 0);
-      ctx.fill();
+      ctx.arc(cx + 4, y - 6, 14, -Math.PI * 0.85, -Math.PI * 0.15);
+      ctx.stroke();
     }
   }
 
@@ -361,9 +444,9 @@ export class Environment {
     ctx.save();
     ctx.globalCompositeOperation = 'source-atop';
     let g = ctx.createLinearGradient(0, baseY - 95, 0, baseY + 4);
-    g.addColorStop(0, 'rgba(148,172,214,0)');
-    g.addColorStop(0.75, 'rgba(148,172,214,0.4)');
-    g.addColorStop(1, 'rgba(132,158,205,0.6)');
+    g.addColorStop(0, 'rgba(154,180,218,0)');
+    g.addColorStop(0.75, 'rgba(154,180,218,0.32)');
+    g.addColorStop(1, 'rgba(140,166,210,0.48)');
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, w, h);
     // Warm top-light.
@@ -384,17 +467,20 @@ export class Environment {
     const textures = [this.makeCloudTexture(rng), this.makeCloudTexture(rng), this.makeCloudTexture(rng)];
     this.cloudBound = WORLD_W * 1.15;
 
-    // Main puffy cumulus, in front of the mountains.
+    // Main puffy cumulus, in front of the mountains. White fill (the texture
+    // carries its own blue-grey underside shading) and a height band low
+    // enough that full silhouettes stay on screen at match-start framing —
+    // no slabs straddling the top edge.
     for (let i = 0; i < 9; i++) {
       const s = 220 + rng() * 320;
       const m = new THREE.Mesh(
         new THREE.PlaneGeometry(s, s * 0.5),
         new THREE.MeshBasicMaterial({
-          map: textures[i % 3], transparent: true, color: '#d7e5f0',
-          opacity: 0.85 + rng() * 0.15, depthWrite: false,
+          map: textures[i % 3], transparent: true, color: '#ffffff',
+          opacity: 0.88 + rng() * 0.12, depthWrite: false,
         })
       );
-      m.position.set((rng() - 0.5) * this.cloudBound * 2, WORLD_H * (0.5 + rng() * 0.42), -390 + rng() * 140);
+      m.position.set((rng() - 0.5) * this.cloudBound * 2, 500 + rng() * 310, -390 + rng() * 140);
       m.userData.speed = 5 + rng() * 9;
       m.renderOrder = -3;
       this.clouds.push(m);
@@ -406,11 +492,11 @@ export class Environment {
       const m = new THREE.Mesh(
         new THREE.PlaneGeometry(s, s * 0.5),
         new THREE.MeshBasicMaterial({
-          map: textures[(i + 1) % 3], transparent: true, color: '#cfe0ee',
-          opacity: 0.5 + rng() * 0.2, depthWrite: false,
+          map: textures[(i + 1) % 3], transparent: true, color: '#f2f8fe',
+          opacity: 0.55 + rng() * 0.15, depthWrite: false,
         })
       );
-      m.position.set((rng() - 0.5) * this.cloudBound * 2, WORLD_H * (0.62 + rng() * 0.3), -700 + rng() * 60);
+      m.position.set((rng() - 0.5) * this.cloudBound * 2, 620 + rng() * 260, -700 + rng() * 60);
       m.userData.speed = 2.5 + rng() * 3.5;
       m.renderOrder = -7.5;
       this.clouds.push(m);
@@ -481,36 +567,66 @@ export class Environment {
         uniform float uTime, uTop;
         varying vec3 vW;
         float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+
+        // Soft-edged horizontal highlight streaks: sparse wide ellipses on a
+        // scrolling grid, varied length/offset per cell so nothing tiles.
+        float streaks(vec2 p, vec2 cs, float seedOfs) {
+          vec2 cell = floor(p / cs);
+          float h1 = hash(cell + seedOfs);
+          float h2 = hash(cell + seedOfs + 7.31);
+          vec2 q = (fract(p / cs) - 0.5) * cs;
+          float hl = cs.x * (0.16 + 0.32 * h1);   // half-length, varied
+          float hh = cs.y * (0.09 + 0.10 * h2);   // half-thickness
+          vec2 r = q - (vec2(h2, h1) - 0.5) * cs * vec2(0.32, 0.5);
+          float e = 1.0 - (r.x * r.x) / (hl * hl) - (r.y * r.y) / (hh * hh);
+          return step(0.42, h1) * pow(max(0.0, e), 1.4);
+        }
+
         void main() {
           float x = vW.x, y = vW.y;
-          // Undulating waterline.
-          float edge = uTop + sin(x * 0.021 + uTime * 1.25) * 3.2
-                            + sin(x * 0.011 - uTime * 0.6) * 2.6;
+          // Undulating waterline with a slow whole-sea bob.
+          float edge = uTop + sin(uTime * 0.55) * 1.5
+                            + sin(x * 0.017 + uTime * 0.9) * 2.4
+                            + sin(x * 0.009 - uTime * 0.5) * 2.0;
           float d = edge - y;                 // depth below the surface
           if (d < 0.0) discard;
 
-          vec3 shallow = vec3(0.24, 0.60, 0.82);
-          vec3 deep    = vec3(0.03, 0.17, 0.42);
-          vec3 col = mix(shallow, deep, clamp(d / 480.0, 0.0, 1.0));
+          // Stacked cyan tones darkening with depth.
+          vec3 c0 = vec3(0.36, 0.79, 0.92);
+          vec3 c1 = vec3(0.13, 0.54, 0.79);
+          vec3 c2 = vec3(0.03, 0.19, 0.45);
+          vec3 col = mix(c0, c1, smoothstep(0.0, 130.0, d));
+          col = mix(col, c2, smoothstep(100.0, 520.0, d));
 
-          // Broad rolling bands.
-          float b1 = sin(x * 0.014 + uTime * 0.9 + d * 0.045);
-          col += 0.06 * b1 * vec3(0.6, 0.9, 1.0);
+          // Broad slow horizontal tone bands (depth-wise, never vertical).
+          col += 0.04 * sin(d * 0.05 - uTime * 0.5) * vec3(0.5, 0.8, 1.0);
 
-          // Bright wave streaks near the surface.
-          float streak = smoothstep(0.74, 0.98, sin(x * 0.03 - uTime * 1.7 + sin(d * 0.16) * 1.2));
-          col += streak * exp(-d * 0.008) * vec3(0.2, 0.3, 0.33);
+          // Two layers of scrolling horizontal highlight streaks.
+          float s1 = streaks(vec2(x - uTime * 24.0, d), vec2(220.0, 30.0), 0.0);
+          float s2 = streaks(vec2(x + uTime * 11.0, d), vec2(120.0, 20.0), 31.7);
+          float sInt = min(0.45, (s1 * 0.42 + s2 * 0.32) * exp(-d * 0.005));
+          col = mix(col, vec3(0.74, 0.95, 1.0), sInt);
 
-          // Foam line where the sea meets the air.
-          float foam = smoothstep(6.5, 1.2, d);
-          float foamTex = 0.78 + 0.22 * sin(x * 0.16 + uTime * 2.2);
-          col = mix(col, vec3(0.97, 1.0, 1.0), foam * foamTex);
+          // Shoreline foam: crisp bright line at the surface over a soft
+          // blurred underlay, bobbing with the waterline itself.
+          float fUnder = smoothstep(9.0, 2.0, d) * 0.3;
+          col = mix(col, vec3(0.93, 0.99, 1.0), fUnder);
+          float fLine = 1.0 - smoothstep(1.3, 2.3, d);
+          col = mix(col, vec3(1.0), fLine * 0.95);
 
-          // Sparse animated sparkle.
-          vec2 gp = floor(vec2(x * 0.16, d * 0.16));
-          float h = hash(gp);
-          float tw = step(0.985, h) * max(0.0, sin(uTime * 3.5 + h * 60.0));
-          col += tw * exp(-d * 0.004) * 0.45;
+          // Sparse 4-point star sparkles (two crossed tapered arms), twinkling.
+          vec2 sp = vec2(x - uTime * 6.0, d);
+          vec2 scs = vec2(46.0, 34.0);
+          vec2 sc = floor(sp / scs);
+          float sh = hash(sc + 3.1);
+          vec2 sr = (fract(sp / scs) - 0.5) * scs
+                  - (vec2(hash(sc + 5.2), hash(sc + 9.7)) - 0.5) * scs * 0.5;
+          float tx = max(0.0, 1.0 - abs(sr.x) / 5.5);
+          float ty = max(0.0, 1.0 - abs(sr.y) / 5.5);
+          float star = tx * tx * max(0.0, 1.0 - abs(sr.y) / (1.1 + 2.2 * tx))
+                     + ty * ty * max(0.0, 1.0 - abs(sr.x) / (1.1 + 2.2 * ty));
+          float tw = 0.35 + 0.65 * max(0.0, sin(uTime * 2.8 + sh * 60.0));
+          col += step(0.9, sh) * star * tw * exp(-d * 0.004) * 0.8;
 
           gl_FragColor = vec4(col, 0.96);
         }`,
@@ -546,6 +662,12 @@ export class Environment {
     if (this.sun) {
       const s = 1 + 0.035 * Math.sin(t * 0.8);
       this.sun.scale.set(s, s, 1);
+      // Anchor the sun in screen space via the live camera (a distant light
+      // source shouldn't parallax like a world prop). Grabbed lazily off the
+      // debug hook so the frozen Environment API stays untouched.
+      const cam = typeof window !== 'undefined' && window.__GB && window.__GB.world
+        ? window.__GB.world.camera : null;
+      if (cam) this._placeSun(cam);
     }
   }
 }

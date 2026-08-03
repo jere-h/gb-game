@@ -36,46 +36,115 @@ const LIP_CHAR = [22, 14, 10];
 
 // --- painterly props ---------------------------------------------------------
 
-function drawRock(ctx, x, y, r, rng) {
-  const n = 6 + ((rng() * 3) | 0);
+function drawRock(ctx, x, y, r, rng, depthT = 0.5) {
+  const n = 5 + ((rng() * 4) | 0);
+  const rot = rng() * Math.PI * 2;
+  const squash = 0.62 + rng() * 0.5;
   const pts = [];
   for (let i = 0; i < n; i++) {
-    const a = (i / n) * Math.PI * 2;
-    const rr = r * (0.68 + rng() * 0.5);
-    pts.push([x + Math.cos(a) * rr, y + Math.sin(a) * rr * 0.82]);
+    const a = rot + (i / n) * Math.PI * 2;
+    const rr = r * (0.62 + rng() * 0.55);
+    pts.push([x + Math.cos(a) * rr, y + Math.sin(a) * rr * squash]);
   }
-  const shades = ['#6b5d52', '#7b6b59', '#5d5148', '#82756a', '#544639'];
+  // Warm earth-toned rock, tinted darker the deeper it sits in the strata so
+  // it belongs to its band instead of floating on top of the gradient.
+  const shades = [[122, 99, 80], [138, 112, 88], [110, 88, 68], [147, 120, 92], [95, 74, 54]];
+  const base = shades[(rng() * shades.length) | 0];
+  const dk = clamp(0.25 + depthT * 0.55, 0, 1);
   ctx.beginPath();
   ctx.moveTo(pts[0][0], pts[0][1]);
   for (let i = 1; i < n; i++) ctx.lineTo(pts[i][0], pts[i][1]);
   ctx.closePath();
-  ctx.fillStyle = shades[(rng() * shades.length) | 0];
+  ctx.fillStyle = css(mix(base, [52, 36, 22], depthT * 0.45));
   ctx.fill();
   ctx.save();
   ctx.clip();
-  ctx.fillStyle = 'rgba(255,240,220,0.18)';
+  ctx.fillStyle = `rgba(255,240,220,${(0.2 * (1 - depthT * 0.6)).toFixed(3)})`;
   ctx.beginPath();
   ctx.ellipse(x - r * 0.25, y - r * 0.35, r * 0.75, r * 0.5, 0, 0, Math.PI * 2);
   ctx.fill();
-  ctx.fillStyle = 'rgba(20,10,5,0.25)';
+  ctx.fillStyle = `rgba(20,10,5,${(0.2 + dk * 0.15).toFixed(3)})`;
   ctx.beginPath();
   ctx.ellipse(x + r * 0.3, y + r * 0.5, r * 0.85, r * 0.55, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Bury the base: soil laps over the lower third so the rock sits IN the
+  // ground rather than being stamped onto it.
+  ctx.fillStyle = 'rgba(96,66,40,0.55)';
+  ctx.beginPath();
+  ctx.ellipse(x + r * 0.05, y + r * squash * 0.72, r * 1.1, r * 0.42, (rng() - 0.5) * 0.4, 0, Math.PI * 2);
   ctx.fill();
   ctx.restore();
 }
 
+// Five pebble variants (round, flat sliver, 5/6/7-sided chips) tinted toward
+// the warm soil palette, each with a thin top highlight.
 function drawPebble(ctx, x, y, r, rng) {
   const shades = [
-    [122, 106, 92], [100, 86, 72], [140, 124, 104], [88, 72, 58], [130, 108, 84],
+    [138, 106, 74], [110, 82, 58], [127, 96, 66], [98, 74, 52], [146, 114, 82],
   ];
+  const variant = (rng() * 5) | 0;
+  const rot = rng() * Math.PI;
   ctx.fillStyle = css(shades[(rng() * shades.length) | 0]);
   ctx.beginPath();
-  ctx.ellipse(x, y, r, r * 0.78, rng() * Math.PI, 0, Math.PI * 2);
+  if (variant === 0) {
+    ctx.ellipse(x, y, r, r * 0.75, rot, 0, Math.PI * 2);
+  } else if (variant === 1) {
+    ctx.ellipse(x, y, r * 1.3, r * 0.5, (rot - Math.PI / 2) * 0.25, 0, Math.PI * 2);
+  } else {
+    const n = 3 + variant; // 5, 6 or 7 sides
+    for (let i = 0; i < n; i++) {
+      const a = rot + (i / n) * Math.PI * 2;
+      const rr = r * (0.78 + rng() * 0.35);
+      const px = x + Math.cos(a) * rr;
+      const py = y + Math.sin(a) * rr * 0.8;
+      if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+  }
   ctx.fill();
-  ctx.fillStyle = 'rgba(255,245,230,0.22)';
+  ctx.fillStyle = 'rgba(255,235,200,0.4)';
+  ctx.fillRect(x - r * 0.5, y - r * 0.55, Math.max(1, r), 1);
+}
+
+// Filled, tapered, gently curving root polygon with a lit left edge.
+// Recurses once for short side branches.
+function drawRoot(ctx, x0, y0, len, drift, baseW, rng, depth = 0) {
+  const N = 12;
+  const c1x = x0 + drift * 0.3 + (rng() - 0.5) * 8;
+  const c1y = y0 + len * 0.55;
+  const x2 = x0 + drift;
+  const y2 = y0 + len;
+  const xs = [], ys = [], hw = [];
+  for (let i = 0; i <= N; i++) {
+    const t = i / N;
+    const it = 1 - t;
+    xs.push(it * it * x0 + 2 * it * t * c1x + t * t * x2);
+    ys.push(it * it * y0 + 2 * it * t * c1y + t * t * y2);
+    hw.push(0.5 + (baseW / 2 - 0.5) * Math.pow(it, 1.35));
+  }
   ctx.beginPath();
-  ctx.ellipse(x - r * 0.25, y - r * 0.3, r * 0.4, r * 0.3, 0, 0, Math.PI * 2);
+  ctx.moveTo(xs[0] - hw[0], ys[0]);
+  for (let i = 1; i <= N; i++) ctx.lineTo(xs[i] - hw[i], ys[i]);
+  for (let i = N; i >= 0; i--) ctx.lineTo(xs[i] + hw[i], ys[i]);
+  ctx.closePath();
+  ctx.fillStyle = '#5C4330';
   ctx.fill();
+  ctx.strokeStyle = 'rgba(139,106,77,0.8)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(xs[0] - hw[0] + 0.6, ys[0] + 2);
+  for (let i = 1; i < N; i++) ctx.lineTo(xs[i] - hw[i] + 0.6, ys[i]);
+  ctx.stroke();
+  if (depth === 0 && baseW > 4) {
+    const nb = 1 + ((rng() * 2) | 0);
+    for (let b = 0; b < nb; b++) {
+      const t = 0.28 + rng() * 0.38;
+      const i = Math.round(t * N);
+      const side = rng() > 0.5 ? 1 : -1;
+      drawRoot(ctx, xs[i], ys[i], len * (0.22 + rng() * 0.2),
+        side * (8 + rng() * 14), Math.max(2.5, baseW * 0.45), rng, 1);
+    }
+  }
 }
 
 export class Terrain {
@@ -117,8 +186,9 @@ export class Terrain {
 
     // Per-column bookkeeping used by the detail painter.
     this.scorch = new Float32Array(w);   // 0 = lush, 1 = fully charred
-    this.edgeHash = new Int32Array(w);   // hash of solid runs per column
-    this.paintHash = new Int32Array(w);  // edge hash + scorch bucket
+    this.scorchY = new Float32Array(w);  // canvas y of the blast that charred this column
+    this.edgeHash = new Int32Array(w);   // (kept for compat; repaints are now range-forced)
+    this.paintHash = new Int32Array(w);  // (kept for compat)
 
     // Deterministic noise phases for grass color / depth variation.
     this._np = [rng() * Math.PI * 2, rng() * Math.PI * 2, rng() * Math.PI * 2, rng() * Math.PI * 2];
@@ -138,6 +208,7 @@ export class Terrain {
         s: 130 + rng() * 220,
       });
     }
+    this._baseH = base;
     const heightAt = (x) => {
       let y = base;
       for (let i = 0; i < 5; i++) {
@@ -175,6 +246,7 @@ export class Terrain {
       }
       const maxD = 115 + rng() * 60;
       const lumps = 5;
+      const lobes = [];
       let px = icx + iw2, py = topY + 24;
       for (let k = 1; k <= lumps; k++) {
         const t = k / lumps;
@@ -183,10 +255,12 @@ export class Terrain {
         const mx = (px + nx) / 2;
         const my = (py + ny) / 2 + 28 + rng() * 34;
         path.quadraticCurveTo(mx, my, nx, ny);
+        // Apex of this scallop lobe (quadratic at t=0.5) — root anchor point.
+        lobes.push({ x: 0.25 * px + 0.5 * mx + 0.25 * nx, y: 0.25 * py + 0.5 * my + 0.25 * ny });
         px = nx; py = ny;
       }
       path.closePath();
-      this.islandInfo = { cx: icx, cy: topY, rx: iw2, bottom: topY + 24 + maxD + 55 };
+      this.islandInfo = { cx: icx, cy: topY, rx: iw2, bottom: topY + 24 + maxD + 55, lobes };
 
       // Two small companion rocks drifting beside the island.
       for (let i = 0; i < 2; i++) {
@@ -196,9 +270,12 @@ export class Terrain {
         const br = 22 + rng() * 20;
         const ph2 = rng() * Math.PI * 2;
         if (bx > 560 && bx < w - 560) {
-          path.moveTo(bx + br, by);
+          // Gentle multi-frequency lumps: reads as a rounded drifting stone.
+          // (A single strong 3-lobe wobble used to carve a deep notch that
+          // looked exactly like an un-dressed shot bite.)
+          path.moveTo(bx + br * (1 + 0.07 * Math.sin(ph2)), by);
           for (let a = 0; a <= Math.PI * 2 + 0.01; a += Math.PI / 16) {
-            const rr = br * (1 + 0.18 * Math.sin(a * 3 + ph2));
+            const rr = br * (1 + 0.07 * Math.sin(a * 3 + ph2) + 0.045 * Math.sin(a * 5 + ph2 * 1.7));
             path.lineTo(bx + Math.cos(a) * rr, by + Math.sin(a) * rr * 0.8);
           }
           path.closePath();
@@ -236,9 +313,65 @@ export class Terrain {
     ctx.stroke(path);
     ctx.restore();
 
-    if (this.islandInfo) this.paintRoots(ctx, rng);
-
     this.paintSurfaceDetail();
+    if (this.islandInfo) this.paintRoots(ctx, rng);
+    this.paintShoreline(rng);
+  }
+
+  // Wet-sand transition where the dirt body plunges into the sea. Breaks the
+  // ruler-straight bottom cut with a wavy darkened band, tide-mark sheen lines
+  // and a few translucent wave scallops lapping onto the dirt. Painted
+  // source-atop, so it only tints existing terrain pixels (mask untouched).
+  paintShoreline(rng) {
+    const { ctx, w, h } = this;
+    const p0 = rng() * 9, p1 = rng() * 9, p2 = rng() * 9, p3 = rng() * 9;
+    ctx.save();
+    ctx.globalCompositeOperation = 'source-atop';
+
+    // Darkened wet-dirt band with a low-frequency wobbling top edge.
+    const yTop = (x) => h - 46 + 6 * Math.sin(x * 0.021 + p0) + 4 * Math.sin(x * 0.0093 + p1);
+    ctx.beginPath();
+    ctx.moveTo(-2, h + 2);
+    ctx.lineTo(-2, yTop(0));
+    for (let x = 0; x <= w; x += 8) ctx.lineTo(x, yTop(x));
+    ctx.lineTo(w + 2, h + 2);
+    ctx.closePath();
+    const g = ctx.createLinearGradient(0, h - 54, 0, h);
+    g.addColorStop(0, 'rgba(58,36,21,0)');
+    g.addColorStop(0.45, 'rgba(46,28,16,0.5)');
+    g.addColorStop(1, 'rgba(24,14,9,0.85)');
+    ctx.fillStyle = g;
+    ctx.fill();
+
+    // Tide-mark sheen lines (sine-displaced, light cyan).
+    ctx.lineJoin = 'round';
+    const tide = (yBase, a1, f1, a2, f2, ph, width, style) => {
+      ctx.beginPath();
+      for (let x = 0; x <= w; x += 6) {
+        const y = yBase + a1 * Math.sin(x * f1 + ph) + a2 * Math.sin(x * f2 + ph * 1.7);
+        if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.lineWidth = width;
+      ctx.strokeStyle = style;
+      ctx.stroke();
+    };
+    tide(h - 37, 2.6, 0.017, 1.8, 0.043, p2, 2.6, 'rgba(215,246,255,0.5)');
+    tide(h - 43, 2.2, 0.013, 1.5, 0.037, p3, 1.6, 'rgba(215,246,255,0.26)');
+
+    // Overlapping translucent wave scallops lapping up the dirt.
+    for (let x = 30 + rng() * 60; x < w; x += 70 + rng() * 90) {
+      const sr = 26 + rng() * 30;
+      const ry = 6 + rng() * 6;
+      const y = h - 30 - rng() * 9;
+      ctx.beginPath();
+      ctx.ellipse(x, y, sr, ry, 0, Math.PI, Math.PI * 2);
+      ctx.fillStyle = 'rgba(200,242,255,0.10)';
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(228,252,255,0.28)';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    }
+    ctx.restore();
   }
 
   // Dirt/rock fill inside the clipped silhouette.
@@ -281,7 +414,12 @@ export class Terrain {
       ctx.fill();
     }
 
-    // Wavy sediment bands.
+    // Wavy sediment bands. Each band's y is warped by a fraction of the local
+    // surface height so the layers loosely follow the terrain profile instead
+    // of running dead-horizontal under hills and valleys.
+    const baseH = this._baseH || 250;
+    const warp = (x) => (baseH - hAt(x)) * 0.3;
+    const bands = [];
     const bph = rng() * 9;
     let by = h - 26 - rng() * 20;
     for (let i = 0; i < 14 && by > h - 660; i++) {
@@ -289,35 +427,59 @@ export class Terrain {
       const amp = 4 + rng() * 6;
       const f = 0.006 + rng() * 0.006;
       ctx.beginPath();
-      ctx.moveTo(0, by + Math.sin(bph + i) * amp);
-      for (let x = 0; x <= w; x += 24) ctx.lineTo(x, by + Math.sin(x * f + bph + i * 1.7) * amp);
-      for (let x = w; x >= 0; x -= 24) ctx.lineTo(x, by + bh + Math.sin(x * f + bph + i * 1.7 + 0.8) * amp);
+      ctx.moveTo(0, by + warp(0) + Math.sin(bph + i) * amp);
+      for (let x = 0; x <= w; x += 24) ctx.lineTo(x, by + warp(x) + Math.sin(x * f + bph + i * 1.7) * amp);
+      for (let x = w; x >= 0; x -= 24) ctx.lineTo(x, by + bh + warp(x) + Math.sin(x * f + bph + i * 1.7 + 0.8) * amp);
       ctx.closePath();
       ctx.fillStyle = i % 3 === 2 ? 'rgba(255,222,170,0.08)' : 'rgba(34,20,9,0.14)';
       ctx.fill();
+      bands.push({ y: by + bh / 2, amp, f, ph: bph + i * 1.7 });
       by -= bh + 18 + rng() * 36;
     }
 
-    // Embedded rocks and pebbles.
-    for (let i = 0; i < 26; i++) {
-      const x = rng() * w;
-      const gy = h - hAt(x);
-      const y = gy + 46 + rng() * Math.max(1, h - gy - 60);
-      drawRock(ctx, x, y, 7 + rng() * 16, rng);
+    // Embedded rocks: clustered pockets (2-4 stones each) at varied depths,
+    // scales 0.6-1.6x, rotated, depth-tinted, partly buried — not a uniform
+    // stamp scatter. Most pebbles cluster along the sediment band boundaries
+    // (as if washed into the strata) rather than uniform scatter.
+    const pockets = 9;
+    for (let i = 0; i < pockets; i++) {
+      const px = (i + 0.15 + rng() * 0.7) * (w / pockets);
+      const gy0 = h - hAt(px);
+      const depthT = 0.12 + rng() * 0.8; // 0 = near surface, 1 = deep
+      const py = gy0 + 46 + depthT * Math.max(1, h - gy0 - 90);
+      const count = 1 + ((rng() * 3.2) | 0);
+      const baseR = 9 + rng() * 8;
+      for (let k = 0; k < count; k++) {
+        const rr = baseR * (0.6 + rng());
+        const rx2 = px + (rng() - 0.5) * (34 + count * 14);
+        const ry2 = py + (rng() - 0.5) * 26;
+        const dT = clamp((ry2 - (h - hAt(rx2))) / Math.max(1, h - (h - hAt(rx2))), 0, 1);
+        drawRock(ctx, rx2, ry2, rr, rng, dT);
+      }
     }
     for (let i = 0; i < 240; i++) {
       const x = rng() * w;
       const gy = h - hAt(x);
-      const y = gy + 26 + rng() * Math.max(1, h - gy - 30);
+      let y;
+      if (bands.length && rng() < 0.7) {
+        const b = bands[(rng() * bands.length) | 0];
+        y = b.y + warp(x) + Math.sin(x * b.f + b.ph) * b.amp + (rng() - 0.5) * 14;
+        if (y < gy + 26 || y > h - 4) continue;
+      } else {
+        y = gy + 26 + rng() * Math.max(1, h - gy - 30);
+      }
       drawPebble(ctx, x, y, 1.5 + rng() * 3.5, rng);
     }
 
-    // Fine speckle grain.
+    // Fine speckle grain — light speckles halved in the upper half of the soil
+    // so the sunlit topsoil stays clean.
     for (let i = 0; i < 8000; i++) {
       const x = rng() * w;
       const gy = h - hAt(x);
       const y = gy + rng() * Math.max(1, h - gy);
-      ctx.fillStyle = rng() > 0.5 ? 'rgba(255,230,190,0.05)' : 'rgba(25,12,4,0.07)';
+      const light = rng() > 0.5;
+      if (light && y < gy + (h - gy) * 0.5 && rng() < 0.5) continue;
+      ctx.fillStyle = light ? 'rgba(255,230,190,0.05)' : 'rgba(25,12,4,0.07)';
       ctx.fillRect(x, y, 1 + rng() * 2, 1 + rng() * 2);
     }
 
@@ -349,26 +511,48 @@ export class Terrain {
     }
   }
 
-  // Cosmetic root strands trailing from the island's belly (not solid).
+  // Cosmetic roots trailing from the island's belly (not solid): filled,
+  // tapered, branching strands anchored at the center of each scallop lobe,
+  // plus a couple of grass tufts dangling off the island rim.
   paintRoots(ctx, rng) {
     const { cx, cy, rx, bottom } = this.islandInfo;
+    const lobes = this.islandInfo.lobes || [];
     ctx.save();
     ctx.lineCap = 'round';
-    for (let i = 0; i < 5; i++) {
-      const col = clamp(Math.round(cx + (rng() - 0.5) * rx * 1.4), 0, this.w - 1);
-      let yTop = -1;
+    const anchors = lobes.length
+      ? lobes.map((l) => l.x)
+      : Array.from({ length: 5 }, () => cx + (rng() - 0.5) * rx * 1.4);
+    for (const ax of anchors) {
+      if (rng() < 0.2) continue; // leave the odd lobe bare so it reads organic
+      const col = clamp(Math.round(ax + (rng() - 0.5) * 8), 4, this.w - 5);
+      // Bottom-most solid pixel in this column = the belly edge to hang from.
+      let yBot = -1;
       for (let y = Math.min(this.h - 1, Math.round(bottom + 60)); y > cy; y--) {
-        if (this.mask[y * this.w + col]) { yTop = y; break; }
+        if (this.mask[y * this.w + col]) { yBot = y; break; }
       }
-      const len = 24 + rng() * 55;
-      const drift = (rng() - 0.5) * 34;
-      if (yTop < 0) continue;
-      ctx.strokeStyle = 'rgba(62,43,28,0.95)';
-      ctx.lineWidth = 2.5;
-      ctx.beginPath();
-      ctx.moveTo(col, yTop - 2);
-      ctx.quadraticCurveTo(col + drift * 0.4, yTop + len * 0.6, col + drift, yTop + len);
-      ctx.stroke();
+      if (yBot < 0) continue;
+      const len = 30 + rng() * 90;
+      const drift = (rng() - 0.5) * 44;
+      drawRoot(ctx, col, yBot - 4, len, drift, 7 + rng() * 3, rng);
+    }
+    // Dangling grass tufts at the rim corners (Miramo-style loose sod).
+    for (const side of [-1, 1]) {
+      if (rng() < 0.25 && side === 1) continue;
+      const gx = cx + side * (rx - 4);
+      const gy = cy + 24;
+      for (let k = 0; k < 3; k++) {
+        const bx = gx - side * (k * 2.5 + rng() * 2);
+        const l = 5 + rng() * 8;
+        const dx = side * (2 + rng() * 3);
+        ctx.strokeStyle = k === 1
+          ? css(mix(GRASS_MID, GRASS_DEEP, 0.2))
+          : css(mix(GRASS_MID, GRASS_DEEP, 0.55));
+        ctx.lineWidth = 1.7 - k * 0.25;
+        ctx.beginPath();
+        ctx.moveTo(bx, gy);
+        ctx.quadraticCurveTo(bx + dx * 0.35, gy + l * 0.7, bx + dx, gy + l);
+        ctx.stroke();
+      }
     }
     ctx.restore();
   }
@@ -389,64 +573,226 @@ export class Terrain {
     return s - Math.floor(s);
   }
 
-  // Grass cap + edge lips along every current top surface. Re-runnable after
-  // destruction (called with a dirty column range). Painting is a pure
-  // function of (column edges, scorch level), and unchanged columns are
-  // skipped via a hash, so repaints are seam-free.
+  // Effective scorch for a surface at (column x, canvas y `top`): the stored
+  // column scorch faded by vertical distance from the blast that caused it,
+  // so an air-burst high above never chars the ground far below it.
+  scorchAt(x, top) {
+    const xi = clamp(x | 0, 0, this.w - 1);
+    const a = this.scorch[xi];
+    if (a <= 0) return 0;
+    const d = Math.abs(top - this.scorchY[xi]);
+    return a * clamp((150 - d) / 105, 0, 1);
+  }
+
+  // Grass cap + edge treatment along every current top surface. Re-runnable
+  // after destruction (called with a dirty column range). All painting is a
+  // pure, deterministic function of (mask, scorch) in a local neighborhood, so
+  // force-repainting a padded range reproduces boundary pixels exactly and
+  // repaints stay seam-free.
   paintSurfaceDetail(rx = 0, rw = this.w) {
     const { ctx, mask, w, h } = this;
-    const x0 = clamp(Math.floor(rx), 0, w - 1);
-    const x1 = clamp(Math.ceil(rx + rw), 0, w - 1);
+    const PAD = 18;
+    const x0 = clamp(Math.floor(rx) - PAD, 0, w - 1);
+    const x1 = clamp(Math.ceil(rx + rw) + PAD, 0, w - 1);
     const n = x1 - x0 + 1;
-    const tops = new Int32Array(n).fill(-1);
-    const changed = new Uint8Array(n);
-    const edges = [];
 
+    // Solid runs per column: arrays of [top, bottom).
+    const runs = new Array(n);
     for (let x = x0; x <= x1; x++) {
-      edges.length = 0;
-      let prev = 0, eh = 17;
+      const list = [];
+      let prev = 0, start = 0;
       for (let y = 0; y < h; y++) {
         const s = mask[y * w + x];
-        if (s !== prev) {
-          edges.push(y);
-          eh = (Math.imul(eh, 31) + y + (s ? 7 : 3)) | 0;
-          prev = s;
-        }
+        if (s && !prev) start = y;
+        else if (!s && prev) list.push([start, y]);
+        prev = s;
       }
-      if (prev) edges.push(h);
-      if (edges.length) tops[x - x0] = edges[0];
+      if (prev) list.push([start, h]);
+      runs[x - x0] = list;
+    }
 
-      const sc = this.scorch[x];
-      const key = (eh ^ Math.imul((sc * 63) | 0, 2654435761)) | 0;
-      if (this.paintHash[x] === key) continue;
-      const edgeChanged = this.edgeHash[x] !== eh;
-      const hadPrev = this.edgeHash[x] !== 0;
-      this.edgeHash[x] = eh;
-      this.paintHash[x] = key;
-      changed[x - x0] = 1;
-
-      for (let e = 0; e + 1 < edges.length; e += 2) {
-        const top = edges[e], bottom = edges[e + 1];
-        // Clear stale tufts/lip left floating above a lowered edge.
-        if (edgeChanged && hadPrev) {
-          const cs = Math.max(e === 0 ? 0 : edges[e - 1], top - 9);
-          if (cs < top) ctx.clearRect(x, cs, 1, top - cs);
-        }
-        this.paintGrassColumn(x, top, bottom, sc);
+    // Clear the cosmetic strip above every run top (stale tufts / outline).
+    for (let i = 0; i < n; i++) {
+      const list = runs[i];
+      for (let r = 0; r < list.length; r++) {
+        const top = list[r][0];
+        const lim = r > 0 ? list[r - 1][1] : 0;
+        const cs = Math.max(lim, top - 14);
+        if (cs < top) ctx.clearRect(x0 + i, cs, 1, top - cs);
       }
     }
 
-    // Grass fringe draping over cliff edges.
+    // Sod columns.
+    for (let i = 0; i < n; i++) {
+      for (const [top, bottom] of runs[i]) {
+        this.paintGrassColumn(x0 + i, top, bottom, this.scorchAt(x0 + i, top));
+      }
+    }
+
+    // Grass fringe draping over cliff edges (topmost surface only).
     for (let i = 0; i < n - 1; i++) {
-      const a = tops[i], b = tops[i + 1];
-      if (a < 0 || b < 0) continue;
-      if (!(changed[i] || changed[i + 1])) continue;
+      const ra = runs[i], rb = runs[i + 1];
+      if (!ra.length || !rb.length) continue;
+      const a = ra[0][0], b = rb[0][0];
       const d = b - a;
-      if (d > 6) this.paintFringe(x0 + i + 1, a, Math.min(12, d), this.scorch[x0 + i]);
-      else if (d < -6) this.paintFringe(x0 + i, b, Math.min(12, -d), this.scorch[x0 + i + 1]);
+      if (d > 6) this.paintFringe(x0 + i + 1, a, Math.min(12, d), this.scorchAt(x0 + i, a));
+      else if (d < -6) this.paintFringe(x0 + i, b, Math.min(12, -d), this.scorchAt(x0 + i + 1, b));
     }
+
+    // Silhouette strokes + drawn tuft shapes along each connected top edge.
+    // Clip to the repaint range so geometry can extend into (identical)
+    // neighbor pixels without double-compositing their anti-aliased edges.
+    const chains = this.buildTopChains(runs, x0);
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(x0, 0, x1 - x0 + 1, h);
+    ctx.clip();
+    for (const chn of chains) this.paintChain(chn);
+    ctx.restore();
 
     if (this.texture) this.texture.needsUpdate = true;
+  }
+
+  // Link run tops of adjacent columns into polyline chains (the walkable /
+  // grassy silhouettes). A chain follows one surface through slopes and small
+  // cliffs; it breaks where the surface vanishes or jumps > 48px.
+  buildTopChains(runs, x0) {
+    const chains = [];
+    let active = [];
+    for (let i = 0; i < runs.length; i++) {
+      const tops = runs[i].map((r) => r[0]);
+      const used = new Array(tops.length).fill(false);
+      const next = [];
+      for (const chn of active) {
+        let best = -1, bd = 49;
+        for (let t = 0; t < tops.length; t++) {
+          if (used[t]) continue;
+          const d = Math.abs(tops[t] - chn.lastY);
+          if (d < bd) { bd = d; best = t; }
+        }
+        if (best >= 0) {
+          used[best] = true;
+          chn.ys.push(tops[best]);
+          chn.lastY = tops[best];
+          next.push(chn);
+        } else {
+          chains.push(chn);
+        }
+      }
+      for (let t = 0; t < tops.length; t++) {
+        if (!used[t]) next.push({ x0: x0 + i, ys: [tops[t]], lastY: tops[t] });
+      }
+      active = next;
+    }
+    chains.push(...active);
+    return chains.filter((c) => c.ys.length >= 3);
+  }
+
+  // One connected top edge: smooth it, stroke a continuous dark outline and a
+  // deep-green under-edge (anti-aliased, round joins — reads hand-inked), then
+  // stamp clustered tuft shapes along it. Colors blend toward char where the
+  // surface is scorched.
+  paintChain(chn) {
+    const { ctx } = this;
+    const m = chn.ys.length;
+    // Two-pass box smooth (radius 2) of the stairstepped tops.
+    let ys = Float64Array.from(chn.ys);
+    for (let pass = 0; pass < 2; pass++) {
+      const out = new Float64Array(m);
+      for (let i = 0; i < m; i++) {
+        let s = 0, c = 0;
+        for (let k = -2; k <= 2; k++) {
+          const j = i + k;
+          if (j < 0 || j >= m) continue;
+          s += ys[j]; c++;
+        }
+        out[i] = s / c;
+      }
+      ys = out;
+    }
+
+    // Per-point scorch samples (quantized for segment batching).
+    const sc = new Float64Array(m);
+    for (let i = 0; i < m; i++) sc[i] = this.scorchAt(chn.x0 + i, chn.ys[i]);
+
+    ctx.save();
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    const strokeRuns = (dy, width, colFn) => {
+      let i = 0;
+      while (i < m - 1) {
+        const bucket = Math.min(4, (sc[i] * 5) | 0);
+        let j = i + 1;
+        while (j < m - 1 && Math.min(4, (sc[j] * 5) | 0) === bucket) j++;
+        ctx.beginPath();
+        ctx.moveTo(chn.x0 + i, ys[i] + dy);
+        for (let k = i + 1; k <= j; k++) ctx.lineTo(chn.x0 + k, ys[k] + dy);
+        ctx.strokeStyle = colFn(bucket / 4);
+        ctx.lineWidth = width;
+        ctx.stroke();
+        i = j;
+      }
+    };
+    // Deep-green silhouette under-edge, then the dark ink line above it.
+    strokeRuns(0.6, 3.4, (s) => css(mix([31, 107, 42], [44, 30, 18], s)));
+    strokeRuns(-1.9, 2.4, (s) => css(mix([26, 34, 16], [10, 6, 4], s), 0.95));
+
+    // Clustered tufts: one drawn blade-clump every ~7px with jittered position,
+    // height and lean; alternating greens; burnt stubs where scorched.
+    if (m >= 6) {
+      const SP = 7;
+      const xa = chn.x0 + 1, xb = chn.x0 + m - 2;
+      for (let k = Math.floor(xa / SP); k <= Math.ceil(xb / SP); k++) {
+        const hh = this.hash01(k * 17.3 + 5);
+        if (hh < 0.14) continue; // occasional bare patch
+        const cx = k * SP + 1 + this.hash01(k * 3.7) * (SP - 2);
+        if (cx < xa || cx > xb) continue;
+        const fi = cx - chn.x0;
+        const i0 = Math.floor(fi), ft = fi - i0;
+        const y = ys[i0] * (1 - ft) + ys[Math.min(m - 1, i0 + 1)] * ft;
+        const slope = (ys[Math.min(m - 1, i0 + 3)] - ys[Math.max(0, i0 - 3)]) / 6;
+        const s = this.scorchAt(Math.round(cx), Math.round(y));
+        if (s >= 0.55) {
+          if (hh > 0.45) { // sparse burnt sprigs on charred ground
+            ctx.fillStyle = 'rgba(26,18,12,0.9)';
+            ctx.beginPath();
+            ctx.moveTo(cx - 1.1, y + 1);
+            ctx.lineTo(cx + (hh - 0.5) * 2, y - 2.4 - hh * 1.6);
+            ctx.lineTo(cx + 1.1, y + 1);
+            ctx.closePath();
+            ctx.fill();
+          }
+          continue;
+        }
+        const th = (3.5 + hh * 4.5) * (1 - s * 0.5);
+        const wk = 2.2 + this.hash01(k * 9 + 4) * 1.6;
+        const lean = clamp(-slope * 2.5, -2.6, 2.6) + (this.hash01(k * 5 + 2) - 0.5) * 2.2;
+        const lush = k % 2 === 0 ? [53, 178, 74] : [99, 209, 62];
+        // Darker back-blade first on some clumps for depth.
+        if (hh > 0.5) {
+          ctx.fillStyle = css(mix([40, 132, 52], [50, 36, 24], s), 0.95);
+          ctx.beginPath();
+          ctx.moveTo(cx - wk * 0.4 + 2.4, y + 1.5);
+          ctx.quadraticCurveTo(cx + 2.6 - lean * 0.3, y - th * 0.5, cx + 2.4 - lean * 0.6, y - th * 0.72);
+          ctx.lineTo(cx + wk + 2.6, y + 1.5);
+          ctx.closePath();
+          ctx.fill();
+        }
+        ctx.fillStyle = css(mix(lush, [58, 42, 26], s));
+        ctx.beginPath();
+        ctx.moveTo(cx - wk, y + 1.5);
+        ctx.quadraticCurveTo(cx - wk * 0.35 + lean * 0.3, y - th * 0.6, cx + lean, y - th);
+        ctx.quadraticCurveTo(cx + wk * 0.45 + lean * 0.3, y - th * 0.42, cx + wk, y + 1.5);
+        ctx.closePath();
+        ctx.fill();
+        // Rare flower head on tall clumps.
+        if (hh > 0.94 && s < 0.25) {
+          ctx.fillStyle = hh > 0.975 ? 'rgba(255,248,236,0.95)' : 'rgba(255,214,92,0.95)';
+          ctx.fillRect(cx + lean - 1, y - th - 2.4, 2, 2);
+        }
+      }
+    }
+    ctx.restore();
   }
 
   paintGrassColumn(x, top, bottom, scorch) {
@@ -460,25 +806,33 @@ export class Terrain {
       return;
     }
     const n1 = this.noise1(x);
-    const j = this.noise2(x) - 0.5;
-    const d = Math.min(run - 1, Math.round(12 + 6 * n1));
+    const n2 = this.noise2(x);
+    const j = n2 - 0.5;
+    const d = Math.min(run - 1, Math.round(11 + 9 * n1));
     const hi = mix([GRASS_HI[0] + j * 36, GRASS_HI[1] + j * 20, GRASS_HI[2] + j * 10], CHAR_HI, s);
     const md = mix([GRASS_MID[0] + j * 44, GRASS_MID[1] + j * 34, GRASS_MID[2] + j * 8], CHAR_MID, s);
     const dp = mix([GRASS_DEEP[0] + j * 24, GRASS_DEEP[1] + j * 26, GRASS_DEEP[2] + j * 6], CHAR_DEEP, s);
 
-    // Dark lip just above the surface (keeps the cel outline after carves).
-    if (top >= 2) {
-      ctx.fillStyle = css(lip, 0.92);
-      ctx.fillRect(x, top - 2, 1, 2);
-    }
-    // Sod: bright lit lip, mid body, deep shaded base.
-    const mh = Math.max(2, Math.round(d * 0.48));
+    // Sod: bright lit lip, mid body, deep shaded base. Each stripe's height is
+    // modulated (~+/-30%) by low-frequency noise so the bands breathe along
+    // the contour instead of hugging it at machine-constant width.
+    const hh = clamp(Math.round(1 + n1 * 1.2 + n2 * 1.3), 1, Math.max(1, d - 2));
+    const mh = Math.max(2, Math.round(d * (0.33 + 0.3 * n2)));
     ctx.fillStyle = css(hi);
-    ctx.fillRect(x, top, 1, 2);
+    ctx.fillRect(x, top, 1, hh);
     ctx.fillStyle = css(md);
-    ctx.fillRect(x, top + 2, 1, mh);
+    ctx.fillRect(x, top + hh, 1, mh);
+    const dpH = Math.max(0, d - hh - mh);
     ctx.fillStyle = css(dp);
-    ctx.fillRect(x, top + 2 + mh, 1, Math.max(0, d - 2 - mh));
+    ctx.fillRect(x, top + hh + mh, 1, dpH);
+    // Sparse dark-green stubble flecks, confined to the shadowed deep stripe.
+    if (s < 0.5 && dpH > 3) {
+      const fr = this.hash01(x * 5 + 2);
+      if (fr > 0.5) {
+        ctx.fillStyle = 'rgba(30,92,30,0.85)';
+        ctx.fillRect(x, top + hh + mh + 1 + Math.floor((fr * 37) % (dpH - 2)), 1, 1);
+      }
+    }
     // Occlusion shadow tucked under the sod.
     const aoH = Math.min(8, run - d);
     if (aoH > 0) {
@@ -492,16 +846,8 @@ export class Terrain {
       ctx.fillStyle = css(lip, 0.9);
       ctx.fillRect(x, bottom, 1, 2);
     }
-    // Tufts poking past the outline (burnt sprigs when scorched).
-    const tr = this.hash01(x);
-    if (s < 0.5 && tr > 0.4) {
-      const th = 2 + Math.floor((tr * 13) % 4);
-      ctx.fillStyle = css(tr > 0.78 ? hi : md);
-      ctx.fillRect(x, Math.max(0, top - 1 - th), 1, th + 1);
-    } else if (s >= 0.5 && tr > 0.82) {
-      ctx.fillStyle = 'rgba(28,20,14,0.9)';
-      ctx.fillRect(x, Math.max(0, top - 3), 1, 3);
-    }
+    // (Tufts, flowers and the silhouette outline are drawn by paintChain as
+    // continuous shapes along the smoothed top edge — no per-pixel fringe.)
   }
 
   paintFringe(x, y, len, scorch) {
@@ -580,21 +926,19 @@ export class Terrain {
       }
     }
 
-    // Scorch columns whose surface sits near the blast — their grass repaints
-    // charred instead of lush.
+    // Record the burn: per column, strength falls off laterally and the blast
+    // height is stored so only surfaces NEAR the explosion repaint charred
+    // (paintGrassColumn fades char with vertical distance via scorchAt). An
+    // air burst high above the ground no longer chars the lawn beneath it.
     const sr = r * 1.6;
     const sx0 = Math.max(0, Math.floor(cx - sr));
     const sx1 = Math.min(w - 1, Math.ceil(cx + sr));
-    const yA = Math.max(0, cy - Math.ceil(sr));
-    const yB = Math.min(h - 1, cy + Math.ceil(sr));
     for (let mx = sx0; mx <= sx1; mx++) {
-      let found = -1;
-      for (let my = yA; my <= yB; my++) {
-        if (this.mask[my * w + mx]) { found = my; break; }
-      }
-      if (found >= 0 && (found === 0 || !this.mask[(found - 1) * w + mx])) {
-        const fall = 1 - Math.abs(mx - cx) / sr;
-        this.scorch[mx] = Math.min(1, Math.max(this.scorch[mx], fall * 1.35));
+      const t = Math.abs(mx - cx) / sr;
+      const amt = Math.min(1, 1.25 * (1 - Math.pow(t, 1.7)));
+      if (amt > this.scorch[mx]) {
+        this.scorch[mx] = amt;
+        this.scorchY[mx] = cy;
       }
     }
 
@@ -637,6 +981,22 @@ export class Terrain {
     ctx.beginPath();
     ctx.arc(cx, cy, r + 0.8, 0, Math.PI * 2);
     ctx.stroke();
+    // Soot smudges: soft dark blobs blown outward around the rim so the
+    // aftermath keeps reading "burnt" well after the smoke clears.
+    for (let i = 0; i < 5; i++) {
+      const a = crng() * Math.PI * 2;
+      const dist = r * (0.95 + crng() * 0.5);
+      const br = r * (0.28 + crng() * 0.24);
+      const bx = cx + Math.cos(a) * dist;
+      const by = cy + Math.sin(a) * dist;
+      const sg = ctx.createRadialGradient(bx, by, 0, bx, by, br);
+      sg.addColorStop(0, 'rgba(20,10,5,0.38)');
+      sg.addColorStop(1, 'rgba(20,10,5,0)');
+      ctx.fillStyle = sg;
+      ctx.beginPath();
+      ctx.arc(bx, by, br, 0, Math.PI * 2);
+      ctx.fill();
+    }
     ctx.restore();
 
     this.texture.needsUpdate = true;

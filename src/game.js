@@ -8,7 +8,10 @@ import { Projectile, POWER_VELOCITY, splashDamage, GRAVITY, WIND_FORCE } from '.
 import { clamp, makeRng, rad } from './util.js';
 
 const TURN_TIME = 20;
-const PREVIEW_N = 36;        // points in the dotted aim-preview arc
+const PREVIEW_N = 64;        // integration samples along the aim-preview path
+const PV_DOTS = 56;          // max marching dots rendered along the path
+const PV_SPACING = 19;       // world units between dots (~19px at aim zoom)
+const PV_SPEED = 30;         // world units/sec the dots march along the arc
 const FALL_SAFE = 120;       // free fall distance before damage kicks in
 
 export class Game {
@@ -127,6 +130,7 @@ export class Game {
       const m = this.active;
       this.focus = { x: m.x, y: m.y + 60 };
       this.updateAimPreview();
+      this._animatePreview(dt);
       if (m.isAI && this.state === 'aim' && this.introT <= 0) this.aiThink(dt);
     }
 
@@ -241,19 +245,63 @@ export class Game {
 
   _ensurePreview() {
     if (this.previewLine) return;
+    // Dot sprite: white core with a dark navy outline so it reads on the sky,
+    // the brown dirt, and the blue mountains alike.
+    const c = document.createElement('canvas');
+    c.width = c.height = 64;
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = 'rgba(23, 36, 74, 0.95)';
+    ctx.beginPath(); ctx.arc(32, 32, 27, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath(); ctx.arc(32, 32, 20, 0, Math.PI * 2); ctx.fill();
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+
     const g = new THREE.BufferGeometry();
-    this._pvPos = new Float32Array(PREVIEW_N * 3);
-    this._pvDist = new Float32Array(PREVIEW_N);
-    g.setAttribute('position', new THREE.BufferAttribute(this._pvPos, 3));
-    g.setAttribute('lineDistance', new THREE.BufferAttribute(this._pvDist, 1));
-    this.previewLine = new THREE.Line(g, new THREE.LineDashedMaterial({
-      color: '#ffffff', transparent: true, opacity: 0.38,
-      dashSize: 7, gapSize: 12, depthWrite: false,
-    }));
+    this._pvDotPos = new Float32Array(PV_DOTS * 3);
+    this._pvDotA = new Float32Array(PV_DOTS);
+    g.setAttribute('position', new THREE.BufferAttribute(this._pvDotPos, 3));
+    g.setAttribute('aAlpha', new THREE.BufferAttribute(this._pvDotA, 1));
+    g.setDrawRange(0, 0);
+    this._pvMat = new THREE.ShaderMaterial({
+      uniforms: {
+        uTex: { value: tex },
+        uScale: { value: 600 },  // px-per-world-unit projection factor (per-frame)
+        uSize: { value: 9.5 },   // dot diameter in world units (~9px on screen)
+      },
+      vertexShader: `
+        attribute float aAlpha;
+        varying float vA;
+        uniform float uScale, uSize;
+        void main() {
+          vA = aAlpha;
+          vec4 mv = modelViewMatrix * vec4(position, 1.0);
+          gl_PointSize = uSize * uScale / -mv.z;
+          gl_Position = projectionMatrix * mv;
+        }`,
+      fragmentShader: `
+        uniform sampler2D uTex;
+        varying float vA;
+        void main() {
+          vec4 c = texture2D(uTex, gl_PointCoord);
+          if (c.a * vA < 0.02) discard;
+          gl_FragColor = vec4(c.rgb, c.a * vA);
+        }`,
+      transparent: true,
+      depthWrite: false,
+    });
+    this.previewLine = new THREE.Points(g, this._pvMat);
     this.previewLine.frustumCulled = false;
     this.previewLine.renderOrder = 20;
     this.previewLine.visible = false;
     this.scene.add(this.previewLine);
+
+    // Path polyline the dots march along (filled by updateAimPreview).
+    this._pvPath = new Float32Array(PREVIEW_N * 2);
+    this._pvCum = new Float32Array(PREVIEW_N);
+    this._pvCount = 0;
+    this._pvTotal = 0;
+    this._pvPhase = 0;
   }
 
   _hidePreview() {
@@ -261,8 +309,9 @@ export class Game {
     this._pvKey = null;
   }
 
-  // Subtle dotted arc covering roughly the first 30% of the flight path.
-  // Recomputed only when an aiming input actually changes anything.
+  // Arc covering roughly the first 30% of the flight path, drawn as marching
+  // dots (see _animatePreview). The polyline is recomputed only when an
+  // aiming input actually changes anything.
   updateAimPreview() {
     const m = this.active;
     if (m.isAI) { this._hidePreview(); return; }
@@ -280,28 +329,54 @@ export class Game {
     const tTotal = (vy + Math.sqrt(Math.max(0, vy * vy + 2 * GRAVITY * Math.max(40, py)))) / GRAVITY;
     const T = clamp(tTotal * 0.3, 0.3, 1.2);
     const h = T / (PREVIEW_N - 1);
-    const P = this._pvPos, D = this._pvDist;
-    let dist = 0, lx = px, ly = py;
+    const P = this._pvPath, C = this._pvCum;
+    let dist = 0, n = 0;
     for (let i = 0; i < PREVIEW_N; i++) {
-      dist += Math.hypot(px - lx, py - ly);
-      P[i * 3] = px; P[i * 3 + 1] = py; P[i * 3 + 2] = 30;
-      D[i] = dist;
-      lx = px; ly = py;
+      if (i > 0) dist += Math.hypot(px - P[(i - 1) * 2], py - P[(i - 1) * 2 + 1]);
+      P[i * 2] = px; P[i * 2 + 1] = py;
+      C[i] = dist;
+      n = i + 1;
       vx += this.wind * WIND_FORCE * h;
       vy -= GRAVITY * h;
       px += vx * h; py += vy * h;
-      if (this.terrain.isSolid(px, py)) {
-        for (let j = i + 1; j < PREVIEW_N; j++) {
-          P[j * 3] = px; P[j * 3 + 1] = py; P[j * 3 + 2] = 30;
-          D[j] = dist;
-        }
-        break;
-      }
+      if (this.terrain.isSolid(px, py)) break;
+    }
+    this._pvCount = n;
+    this._pvTotal = dist;
+    this.previewLine.visible = n > 1;
+  }
+
+  // Per-frame: place the marching dots along the stored polyline. Dots scroll
+  // toward the target, are white-with-navy-outline, and fade from full alpha
+  // at the barrel to ~0.3 at the end of the arc.
+  _animatePreview(dt) {
+    if (!this.previewLine || !this.previewLine.visible) return;
+    this._pvPhase = (this._pvPhase + dt * PV_SPEED) % PV_SPACING;
+    // Screen-locked dot size: projection factor from world units to pixels.
+    const pr = Math.min(devicePixelRatio, 2);
+    this._pvMat.uniforms.uScale.value =
+      (innerHeight * pr * 0.5) / Math.tan((this.camera.fov * Math.PI) / 360);
+    const P = this._pvPath, C = this._pvCum, n = this._pvCount, total = this._pvTotal;
+    const pos = this._pvDotPos, al = this._pvDotA;
+    let count = 0, seg = 1;
+    for (let d = this._pvPhase + 10; d <= total && count < PV_DOTS; d += PV_SPACING) {
+      while (seg < n - 1 && C[seg] < d) seg++;
+      const c0 = C[seg - 1], c1 = C[seg];
+      const t = c1 > c0 ? clamp((d - c0) / (c1 - c0), 0, 1) : 0;
+      pos[count * 3] = P[(seg - 1) * 2] + (P[seg * 2] - P[(seg - 1) * 2]) * t;
+      pos[count * 3 + 1] = P[(seg - 1) * 2 + 1] + (P[seg * 2 + 1] - P[(seg - 1) * 2 + 1]) * t;
+      pos[count * 3 + 2] = 30;
+      const f = total > 0 ? d / total : 0;
+      // Full alpha at the barrel easing to ~0.3 at the arc end, with a short
+      // ramp at both ends so marching dots never pop in or out.
+      const ends = Math.min(1, (d - 4) / PV_SPACING) * Math.min(1, (total - d) / PV_SPACING);
+      al[count] = (1 - 0.7 * f) * (0.35 + 0.65 * clamp(ends, 0, 1));
+      count++;
     }
     const geo = this.previewLine.geometry;
+    geo.setDrawRange(0, count);
     geo.attributes.position.needsUpdate = true;
-    geo.attributes.lineDistance.needsUpdate = true;
-    this.previewLine.visible = true;
+    geo.attributes.aAlpha.needsUpdate = true;
   }
 
   // --- AI --------------------------------------------------------------------

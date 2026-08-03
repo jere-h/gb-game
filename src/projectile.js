@@ -3,7 +3,7 @@
 // plus a brief muzzle flash spawned at launch (the constructor runs at fire).
 
 import * as THREE from 'three';
-import { fxTextures } from './effects.js';
+import { fxTextures, fxSpawn } from './effects.js';
 import { makeRng } from './util.js';
 
 export const GRAVITY = 480;       // world units / s^2
@@ -11,7 +11,10 @@ export const WIND_FORCE = 26;     // accel per wind unit
 export const POWER_VELOCITY = 13; // launch speed per power point (power 0-100)
 
 const vrng = makeRng(4242);
-const TRAIL_MAX = 26;
+// ~0.33s of position history at 60Hz: long enough to visibly bend with the
+// ballistic arc, short enough to never read as a barrel-to-shell laser beam.
+const TRAIL_MAX = 20;
+const TAU_P = Math.PI * 2;
 
 export class Projectile {
   constructor(scene, { x, y, vx, vy, wind = 0, radius = 55, damage = 45, color = '#ffe08a' }) {
@@ -27,26 +30,45 @@ export class Projectile {
 
     const T = fxTextures();
 
-    // Shell: bright white core inside a tinted glass-y sphere.
+    // Shell: chunky bomb — bright core, tinted body, fat dark outline and a
+    // tail fin so the eye has a real object to track at gameplay zoom. The
+    // whole group rotates to face the velocity vector (see update()).
     this.mesh = new THREE.Mesh(
-      new THREE.SphereGeometry(7, 14, 12),
+      new THREE.SphereGeometry(9, 14, 12),
       new THREE.MeshBasicMaterial({ color })
     );
     this.mesh.position.set(x, y, 40);
     scene.add(this.mesh);
 
     const core = new THREE.Mesh(
-      new THREE.SphereGeometry(3.8, 10, 8),
+      new THREE.SphereGeometry(5, 10, 8),
       new THREE.MeshBasicMaterial({ color: '#ffffff' })
     );
     this.mesh.add(core);
 
-    // Fixed: real radial-gradient glow texture (was map:null).
+    // Dark cartoon outline (inverted hull) so the shell holds up against sky.
+    const outline = new THREE.Mesh(
+      new THREE.SphereGeometry(9, 14, 12),
+      new THREE.MeshBasicMaterial({ color: '#2a1a10', side: THREE.BackSide })
+    );
+    outline.scale.setScalar(1.26);
+    this.mesh.add(outline);
+
+    // Tail fin cone pointing opposite the flight direction.
+    const tail = new THREE.Mesh(
+      new THREE.ConeGeometry(4.5, 10, 8),
+      new THREE.MeshBasicMaterial({ color: '#2a1a10' })
+    );
+    tail.rotation.z = Math.PI / 2; // cone +y -> -x (backwards)
+    tail.position.x = -11;
+    this.mesh.add(tail);
+
+    // Warm additive glow halo ~2x the shell.
     this.glow = new THREE.Sprite(new THREE.SpriteMaterial({
-      map: T.glow, color: '#ffcc66', transparent: true, opacity: 0.85,
+      map: T.glow, color: '#ff9d3d', transparent: true, opacity: 0.85,
       blending: THREE.AdditiveBlending, depthWrite: false,
     }));
-    this.glow.scale.set(34, 34, 1);
+    this.glow.scale.set(64, 64, 1);
     this.glow.renderOrder = 30; // above the sea plane (renderOrder 8)
     this.mesh.add(this.glow);
 
@@ -54,10 +76,11 @@ export class Projectile {
       map: T.star, color: '#fff2c0', transparent: true, opacity: 0.5,
       blending: THREE.AdditiveBlending, depthWrite: false,
     }));
-    halo.scale.set(20, 20, 1);
+    halo.scale.set(34, 34, 1);
     halo.renderOrder = 30;
     this.mesh.add(halo);
     this._halo = halo;
+    this._puffTimer = 0; // trail smoke-puff cadence (~60ms)
 
     // Tapered ribbon trail (triangle strip, vertex-colored, additive).
     this._trailPos = new Float32Array(TRAIL_MAX * 2 * 3);
@@ -169,6 +192,26 @@ export class Projectile {
     }
   }
 
+  // Grey smoke puffs dropped along the flight path (~every 60ms). They live
+  // in the Effects particle pool, so they keep expanding/fading naturally even
+  // after the shell detonates — the arc stays written in the sky for a beat.
+  _emitPuffs(dt) {
+    this._puffTimer -= dt;
+    while (this._puffTimer <= 0) {
+      this._puffTimer += 0.06;
+      fxSpawn({
+        tex: 'smoke',
+        x: this.x + (vrng() - 0.5) * 8, y: this.y + (vrng() - 0.5) * 8, z: 37,
+        vx: (vrng() - 0.5) * 26 - this.vx * 0.04,
+        vy: 14 + vrng() * 18 - this.vy * 0.03,
+        gravity: -18, drag: 1.2,
+        dur: 1.0 + vrng() * 0.4, size: 10 + vrng() * 7, size1: 32 + vrng() * 16,
+        color: '#948a7e', color1: '#bcb4aa', opacity: 0.5,
+        fade: 'smoke', rot: vrng() * TAU_P, spin: (vrng() - 0.5) * 2,
+      });
+    }
+  }
+
   _updateTrail() {
     const pts = this.trail;
     pts.unshift({ x: this.x, y: this.y });
@@ -177,7 +220,6 @@ export class Projectile {
     const geo = this.trailMesh.geometry;
     if (n < 2) { geo.setDrawRange(0, 0); return; }
     const P = this._trailPos, C = this._trailCol;
-    const col = this._trailColor;
     for (let i = 0; i < n; i++) {
       const p = pts[i];
       const q = i === 0 ? pts[1] : pts[i - 1];
@@ -186,18 +228,18 @@ export class Projectile {
       const len = Math.hypot(dx, dy) || 1;
       dx /= len; dy /= len;
       const t = i / (TRAIL_MAX - 1);
-      const w = 6.5 * (1 - t);            // taper toward the tail
+      const w = 9.5 * Math.pow(1 - t, 1.25) + 0.3; // fat head, taper to nothing
       const px = -dy * w, py = dx * w;
       const o = i * 6;
       P[o] = p.x + px; P[o + 1] = p.y + py; P[o + 2] = 38;
       P[o + 3] = p.x - px; P[o + 4] = p.y - py; P[o + 5] = 38;
-      // Additive: darker = more transparent. Head is white-hot, the tail
-      // cools toward orange (green/blue fall off faster than red).
-      const f = Math.pow(1 - t, 1.5);
-      const boost = i === 0 ? 1.3 : 1;
-      const cr = Math.min(1, col.r * f * boost);
-      const cg = Math.min(1, col.g * f * f * boost);
-      const cb = Math.min(1, col.b * f * f * f * boost);
+      // Additive: darker = more transparent. Comet ramp — white only at the
+      // very head, quickly cooling through amber/orange to a dim red tail.
+      const f = 1 - t;
+      const head = Math.pow(f, 7); // narrow white-hot tip
+      const cr = Math.min(1, 1.3 * f + head * 0.7);
+      const cg = Math.min(1, 0.55 * Math.pow(f, 1.7) + head * 0.9);
+      const cb = Math.min(1, 0.1 * Math.pow(f, 3) + head * 0.95);
       C[o] = cr; C[o + 1] = cg; C[o + 2] = cb;
       C[o + 3] = cr; C[o + 4] = cg; C[o + 5] = cb;
     }
@@ -239,12 +281,13 @@ export class Projectile {
     }
     this.mesh.position.set(this.x, this.y, 40);
     this.mesh.rotation.z = Math.atan2(this.vy, this.vx);
-    // Flickering glow + slowly spinning star halo.
-    const pulse = 1 + Math.sin(this._age * 26) * 0.12;
-    this.glow.scale.set(34 * pulse, 34 * pulse, 1);
+    // ~8Hz glow pulse + slowly spinning star halo.
+    const pulse = 1 + Math.sin(this._age * 50) * 0.1;
+    this.glow.scale.set(64 * pulse, 64 * pulse, 1);
     this._halo.material.rotation = this._age * 3.5;
     this._updateTrail();
     this._emitSparks(dt);
+    this._emitPuffs(dt);
     return null;
   }
 

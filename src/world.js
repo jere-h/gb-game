@@ -1,8 +1,11 @@
 // Renderer, camera rig (smooth follow + zoom + impact punch), lights,
 // post-processing. The rig clamps the visible frustum (at the terrain plane
 // z=0) so the camera never shows past the world's art: terrain spans x ±1200,
-// so the view is kept within ~±1050 horizontally, and never dips below the
-// sea nor above the sky art.
+// so the view is kept within ~±1100 horizontally, and never dips below the
+// sea nor above the sky art. The horizontal bound is deliberately generous:
+// when the camera clamps against one side, the opposite frame edge must land
+// beyond the gameplay-object band (islands/mobiles live within ~±740) so
+// props are not sliced by the frame edge.
 
 import * as THREE from 'three';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
@@ -12,7 +15,7 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { WORLD_W, WORLD_H } from './terrain.js';
 import { clamp, lerp } from './util.js';
 
-const ART_X = 1050;        // max |x| the view may reach at z=0
+const ART_X = 1100;        // max |x| the view may reach at z=0
 const VIEW_BOTTOM = -170;  // lowest world y the view bottom may reach (sea strip)
 const VIEW_TOP = 1500;     // highest world y the view top may reach
 
@@ -34,7 +37,10 @@ export class World {
 
     this.composer = new EffectComposer(this.renderer);
     this.composer.addPass(new RenderPass(this.scene, this.camera));
-    this.bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.35, 0.6, 0.85);
+    // Bloom kept restrained (low strength, tight radius, high threshold) so
+    // additive FX keep their yellow/orange color ramp instead of blowing out
+    // to flat white — only the very hottest pixels glow.
+    this.bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.26, 0.4, 0.9);
     this.composer.addPass(this.bloom);
     this.composer.addPass(new OutputPass());
 
