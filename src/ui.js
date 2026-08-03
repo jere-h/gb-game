@@ -1722,7 +1722,7 @@ export class UI {
     // tail -> head ramp, all inside the navy/gold system
     let tail, head;
     if (s === 0) { tail = '#6f7fa8'; head = '#a8b6d8'; }
-    else if (t <= 0.4) { tail = '#ffb84a'; head = '#fff2ce'; }
+    else if (t <= 0.4) { tail = '#e89a2a'; head = '#ffe9a8'; }
     else if (t <= 0.7) { tail = '#ff9436'; head = '#ffe27a'; }
     else { tail = '#e0491f'; head = '#ff5a3c'; }
     this.el.windHi.setAttribute('stop-color', tail);
