@@ -92,6 +92,46 @@ export function fxTextures() {
     ctx.fillRect(0, 0, 128, 128);
   });
 
+  // Fireball: baked color ramp (cream core -> yellow -> orange -> deep red rim)
+  // with blobby lobes so overlapping sprites read as rolling flame, not a ball.
+  // Drawn with NORMAL blending so stacked copies can never clip to white.
+  const fire = canvasTex(128, (ctx) => {
+    const base = ctx.createRadialGradient(64, 64, 0, 64, 64, 62);
+    base.addColorStop(0, 'rgba(255,242,204,1)');    // #fff2cc — never pure white
+    base.addColorStop(0.3, 'rgba(255,224,102,1)');  // #ffe066
+    base.addColorStop(0.58, 'rgba(255,138,0,0.96)');// #ff8a00
+    base.addColorStop(0.82, 'rgba(212,53,0,0.6)');  // #d43500
+    base.addColorStop(1, 'rgba(150,30,0,0)');
+    ctx.fillStyle = base;
+    ctx.beginPath();
+    ctx.arc(64, 64, 62, 0, TAU);
+    ctx.fill();
+    // Lobes break the perfect-circle silhouette.
+    const r = makeRng(31);
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * TAU + r() * 0.8;
+      const cx = 64 + Math.cos(a) * (26 + r() * 12);
+      const cy = 64 + Math.sin(a) * (26 + r() * 12);
+      const rad = 16 + r() * 14;
+      const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, rad);
+      g.addColorStop(0, 'rgba(255,224,102,0.85)');
+      g.addColorStop(0.55, 'rgba(255,138,0,0.5)');
+      g.addColorStop(1, 'rgba(212,53,0,0)');
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(cx, cy, rad, 0, TAU);
+      ctx.fill();
+    }
+    // Hot heart.
+    const core = ctx.createRadialGradient(64, 64, 0, 64, 64, 22);
+    core.addColorStop(0, 'rgba(255,246,220,1)');
+    core.addColorStop(1, 'rgba(255,224,102,0)');
+    ctx.fillStyle = core;
+    ctx.beginPath();
+    ctx.arc(64, 64, 22, 0, TAU);
+    ctx.fill();
+  });
+
   // Star flash: 4 long rays + 4 short diagonals + hot core.
   const star = canvasTex(128, (ctx) => {
     ctx.translate(64, 64);
@@ -130,11 +170,18 @@ export function fxTextures() {
     ctx.fill();
   });
 
-  _tex = { glow, spark, ring, smoke, star };
+  _tex = { glow, spark, ring, smoke, star, fire };
   return _tex;
 }
 
 const SMOKE_TINTS = ['#8d8177', '#9a8e82', '#7a6f66', '#a89c8d'];
+
+// Module-level hook so Projectile (which has no Effects reference) can spawn
+// managed particles that outlive it — trail smoke, lingering barrel smoke.
+let _activeFx = null;
+export function fxSpawn(opts) {
+  return _activeFx ? _activeFx._p(opts) : null;
+}
 
 // ---------------------------------------------------------------------------
 
@@ -163,9 +210,12 @@ export class Effects {
       ringSoft: sprite(T.ring),
       star: sprite(T.star, { blending: THREE.AdditiveBlending }),
       smoke: this.smokeMat,
+      fire: sprite(T.fire),
+      fireAdd: sprite(T.fire, { blending: THREE.AdditiveBlending }),
     };
 
     this._debrisGeo = new THREE.DodecahedronGeometry(1);
+    _activeFx = this;
   }
 
   makeGlowTexture() {
@@ -177,7 +227,7 @@ export class Effects {
   _p({
     tex = 'glow', x, y, z = 45, vx = 0, vy = 0, gravity = 0, drag = 0,
     dur = 0.6, delay = 0, size = 20, size1 = null, aspect = 1,
-    color = '#ffffff', opacity = 1, fade = 'out', spin = 0, rot = 0, stretch = 0,
+    color = '#ffffff', color1 = null, opacity = 1, fade = 'out', spin = 0, rot = 0, stretch = 0,
   }) {
     const mat = this._mats[tex].clone();
     mat.color = new THREE.Color(color);
@@ -191,6 +241,8 @@ export class Effects {
     s.userData = {
       vx, vy, gravity, drag, dur, delay, t: 0,
       size0: size, size1: size1 ?? size, aspect, op: opacity, fade, spin, stretch,
+      col0: color1 ? new THREE.Color(color) : null,
+      col1: color1 ? new THREE.Color(color1) : null,
     };
     this.scene.add(s);
     this.particles.push(s);
@@ -445,9 +497,12 @@ export class Effects {
       switch (u.fade) {
         case 'flash': o = (1 - k) * (1 - k); break;
         case 'smoke': o = Math.min(1, k * 5) * Math.pow(1 - k, 1.3); break;
+        // Fire: hold full for the first ~45% of life, then die smoothly.
+        case 'fire': o = k < 0.45 ? 1 : Math.pow(1 - (k - 0.45) / 0.55, 1.25); break;
         default: o = 1 - k;
       }
       p.material.opacity = u.op * o;
+      if (u.col1) p.material.color.copy(u.col0).lerp(u.col1, k);
     }
 
     for (let i = this.debris.length - 1; i >= 0; i--) {
