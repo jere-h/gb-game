@@ -22,6 +22,10 @@ const arg = (name, dflt) => {
 const seed = arg('--seed', '42');
 const PORT = Number(arg('--port', 8351));
 const OUT = arg('--out', 'shots');
+// --viewport WxH (default desktop 1600x900). e.g. --viewport 844x390 for a
+// phone-landscape run; adds hasTouch so the game's touch UI appears.
+const [VW, VH] = arg('--viewport', '1600x900').split('x').map(Number);
+const MOBILE = VW < 1100;
 
 mkdirSync(OUT, { recursive: true });
 const server = spawn('node', ['scripts/serve.mjs', String(PORT)], { stdio: 'ignore' });
@@ -30,7 +34,12 @@ await new Promise((r) => setTimeout(r, 800));
 const browser = await chromium.launch({
   executablePath: process.env.GB_CHROMIUM || '/opt/pw-browsers/chromium',
 });
-const page = await browser.newPage({ viewport: { width: 1600, height: 900 } });
+const page = await browser.newPage({
+  viewport: { width: VW, height: VH },
+  hasTouch: MOBILE,
+  isMobile: MOBILE,
+  deviceScaleFactor: MOBILE ? 2 : 1,
+});
 page.on('pageerror', (e) => console.error('PAGE ERROR:', e.message));
 page.on('console', (m) => { if (m.type() === 'error') console.error('CONSOLE:', m.text()); });
 
