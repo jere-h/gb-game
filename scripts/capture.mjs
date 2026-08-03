@@ -63,12 +63,13 @@ await page.keyboard.up('Space');
 await settle(25);
 await page.screenshot({ path: `${OUT}/03-flight.png` });
 
-// Wait until the projectile resolves (state leaves 'flying').
+// Wait until the projectile resolves (state leaves 'flying'), then let the
+// hitstop (~5 frames) pass and catch the fireball near its colorful peak.
 await page.waitForFunction(() => window.__GB.game.state !== 'flying', { timeout: 20000 });
-await settle(6);
+await settle(14);
 await page.screenshot({ path: `${OUT}/04-explosion.png` });
 
-await settle(90);
+await settle(82);
 await page.screenshot({ path: `${OUT}/05-aftermath.png` });
 
 await browser.close();
