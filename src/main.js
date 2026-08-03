@@ -46,17 +46,28 @@ if (params.pose === 'charge') {
   game.power = 62;
 }
 
-// ?fixeddt=1: step exactly 1/60s per rendered frame so screenshot captures
+// ?fixeddt=1: step exactly 1/60s per simulation tick so screenshot captures
 // hit deterministic moments even under slow software rendering.
 const fixedDt = params.fixeddt === '1' ? 1 / 60 : 0;
+// ?steps=N: run N simulation ticks per rendered frame. Rendering under
+// software WebGL costs orders of magnitude more than simulating, so capture
+// runs use steps>1 to reach the same game time in a fraction of the frames.
+// Screenshot timing stays exact because the capture script counts SIM ticks.
+let stepsPerFrame = Math.max(1, Math.min(16, Number(params.steps) || 1));
+// Capture runs raise this only during input-free stretches (flight, aftermath);
+// while keys are being held it must stay 1 so key timing quantizes to a single
+// tick and the same seed always produces the same shot.
+// 0 pauses the simulation while rendering continues — capture pauses on the
+// exact tick it wants so screenshot timing is immune to IPC latency.
+const setSteps = (n) => { stepsPerFrame = Math.max(0, Math.min(16, Number(n) || 0)); };
 
 let last = performance.now();
-let frames = 0;
-function loop(now) {
-  const rawDt = fixedDt || Math.min(0.05, (now - last) / 1000);
-  last = now;
-  frames++;
+let frames = 0;   // rendered frames
+let ticks = 0;    // simulation ticks
 
+// One fixed simulation tick (everything except the render).
+function simulate(rawDt, nowSec) {
+  ticks++;
   // Hitstop: at the moment of impact the game freezes (~80ms) while the
   // camera punch, shake, and environment keep breathing.
   let dt = rawDt;
@@ -68,15 +79,33 @@ function loop(now) {
   input.update(dt);
   game.update(dt);
   effects.update(dt);
-  env.update(rawDt, now / 1000);
+  env.update(rawDt, nowSec);
   for (const m of mobiles) if (m.alive) m.syncTransform();
 
   const wide = game.state === 'flying';
   world.follow(game.focus.x, game.focus.y, wide);
-  world.update(rawDt, effects.shakeOffset());
+}
+
+function loop(now) {
+  const rawDt = fixedDt || Math.min(0.05, (now - last) / 1000);
+  last = now;
+  frames++;
+
+  for (let i = 0; i < stepsPerFrame; i++) {
+    simulate(rawDt, (now + i * rawDt * 1000) / 1000);
+  }
+
+  // Paused (stepsPerFrame 0) still renders, so a paused frame can be captured.
+  world.update(rawDt * Math.max(1, stepsPerFrame), effects.shakeOffset());
   requestAnimationFrame(loop);
 }
 requestAnimationFrame(loop);
 
-// Test/screenshot hooks.
-window.__GB = { world, terrain, game, mobiles, effects, framesRendered: () => frames };
+// Test/screenshot hooks. framesRendered counts renders; simTicks counts
+// simulation steps (what capture timing should key off).
+window.__GB = {
+  world, terrain, game, mobiles, effects,
+  framesRendered: () => frames,
+  simTicks: () => ticks,
+  setSteps,
+};
