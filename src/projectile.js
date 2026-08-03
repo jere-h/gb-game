@@ -3,7 +3,7 @@
 // plus a brief muzzle flash spawned at launch (the constructor runs at fire).
 
 import * as THREE from 'three';
-import { fxTextures, fxSpawn } from './effects.js';
+import { fxTextures, fxSpawn, fxNoteVelocity } from './effects.js';
 import { makeRng } from './util.js';
 
 export const GRAVITY = 480;       // world units / s^2
@@ -32,54 +32,68 @@ export class Projectile {
 
     // Shell: chunky bomb — bright core, tinted body, fat dark outline and a
     // tail fin so the eye has a real object to track at gameplay zoom. The
-    // whole group rotates to face the velocity vector (see update()).
+    // whole group rotates to face the velocity vector AND is stretched along
+    // it (1.9 x 0.85): the hero object of the mid-flight frame has to be the
+    // most readable thing in it, not a pale dot with less contrast than its
+    // own exhaust.
+    const SR = 10.5;
     this.mesh = new THREE.Mesh(
-      new THREE.SphereGeometry(9, 14, 12),
+      new THREE.SphereGeometry(SR, 14, 12),
       new THREE.MeshBasicMaterial({ color })
     );
     this.mesh.position.set(x, y, 40);
+    this.mesh.scale.set(1.9, 0.85, 1);
+    this.mesh.renderOrder = 26;
     scene.add(this.mesh);
 
     const core = new THREE.Mesh(
-      new THREE.SphereGeometry(5, 10, 8),
-      new THREE.MeshBasicMaterial({ color: '#ffffff' })
+      new THREE.SphereGeometry(SR * 0.52, 10, 8),
+      new THREE.MeshBasicMaterial({ color: '#fffdf0' })
     );
+    core.position.x = SR * 0.22; // hot leading edge, not a dead-centre dot
     this.mesh.add(core);
 
-    // Dark cartoon outline (inverted hull) so the shell holds up against sky.
+    // Dark cartoon outline (inverted hull) so the shell holds up against the
+    // white clouds it flies across as well as against the sky.
     const outline = new THREE.Mesh(
-      new THREE.SphereGeometry(9, 14, 12),
-      new THREE.MeshBasicMaterial({ color: '#2a1a10', side: THREE.BackSide })
+      new THREE.SphereGeometry(SR, 14, 12),
+      new THREE.MeshBasicMaterial({ color: '#1d1108', side: THREE.BackSide })
     );
-    outline.scale.setScalar(1.26);
+    outline.scale.setScalar(1.3);
     this.mesh.add(outline);
 
     // Tail fin cone pointing opposite the flight direction.
     const tail = new THREE.Mesh(
-      new THREE.ConeGeometry(4.5, 10, 8),
-      new THREE.MeshBasicMaterial({ color: '#2a1a10' })
+      new THREE.ConeGeometry(5.2, 11, 8),
+      new THREE.MeshBasicMaterial({ color: '#1d1108' })
     );
     tail.rotation.z = Math.PI / 2; // cone +y -> -x (backwards)
-    tail.position.x = -11;
+    tail.position.x = -SR * 1.25;
     this.mesh.add(tail);
 
-    // Warm additive glow halo ~2x the shell.
-    this.glow = new THREE.Sprite(new THREE.SpriteMaterial({
-      map: T.glow, color: '#ffab4a', transparent: true, opacity: 0.95,
-      blending: THREE.AdditiveBlending, depthWrite: false,
-    }));
-    this.glow.scale.set(92, 92, 1);
-    this.glow.renderOrder = 30; // above the sea plane (renderOrder 8)
-    this.mesh.add(this.glow);
-
-    const halo = new THREE.Sprite(new THREE.SpriteMaterial({
-      map: T.star, color: '#fff2c0', transparent: true, opacity: 0.5,
-      blending: THREE.AdditiveBlending, depthWrite: false,
-    }));
-    halo.scale.set(34, 34, 1);
-    halo.renderOrder = 30;
-    this.mesh.add(halo);
-    this._halo = halo;
+    // Halo stack lives in the scene, NOT under the stretched mesh: sprites
+    // decompose their world matrix, so a non-uniform parent scale would shear
+    // them. Positioned by hand every frame in update().
+    const mkSprite = (map, col, size, op, ro = 30) => {
+      const s = new THREE.Sprite(new THREE.SpriteMaterial({
+        map, color: col, transparent: true, opacity: op,
+        blending: THREE.AdditiveBlending, depthWrite: false,
+      }));
+      s.scale.set(size, size, 1);
+      s.renderOrder = ro;
+      s.position.set(x, y, 39);
+      scene.add(s);
+      return s;
+    };
+    // Wide soft halo (3.2x shell radius) behind the body...
+    this.glow = mkSprite(T.glow, '#ffb347', SR * 6.6, 0.9, 24);
+    this.glow.position.z = 38.5;
+    // ...a star flash at ~1.8x aligned to the velocity vector...
+    this._halo = mkSprite(T.star, '#fff2c0', SR * 3.8, 0.62, 27);
+    this._halo.position.z = 41;
+    // ...and a small white-hot bloom riding the nose.
+    this._nose = mkSprite(T.glow, '#fff6d8', SR * 1.5, 0.95, 27);
+    this._nose.position.z = 41;
     this._puffTimer = 0; // trail smoke-puff cadence (~60ms)
 
     // Tapered ribbon trail (triangle strip, vertex-colored, additive).
@@ -202,26 +216,33 @@ export class Projectile {
     const px = this._puffPX ?? this.x, py = this._puffPY ?? this.y;
     const dx = this.x - px, dy = this.y - py;
     const dist = Math.hypot(dx, dy);
-    const STEP = 15; // world units between puffs (puffs are ~17u wide at spawn)
+    const STEP = 17; // world units between puffs (puffs are ~20u wide at spawn)
     let total = (this._puffCarry ?? 0) + dist;
     while (total >= STEP) {
       total -= STEP;
       const t = dist > 0 ? 1 - total / dist : 0;
       const sx = px + dx * t, sy = py + dy * t;
+      this._puffN = (this._puffN || 0) + 1;
       fxSpawn({
-        // Cel puff, not the soft gradient blob: the trail has to read as a
-        // chunky chain of smoke balls, which is what makes a GunBound shot
-        // legible from across the room.
         tex: 'puff',
         x: sx + (vrng() - 0.5) * 7, y: sy + (vrng() - 0.5) * 7, z: 37,
-        vx: (vrng() - 0.5) * 24 - this.vx * 0.03 + this.wind * 6,
-        vy: 14 + vrng() * 16 - this.vy * 0.03,
-        gravity: -18, drag: 1.2,
-        // Fat puffs: the trail has to be readable from across the room, so
-        // each puff blows up to ~4x its spawn size over its life.
-        dur: 1.0 + vrng() * 0.5, size: 15 + vrng() * 8, size1: 52 + vrng() * 20,
-        color: '#a89e92', color1: '#d0cac1', opacity: 0.8,
-        fade: 'trail', rot: vrng() * TAU_P, spin: (vrng() - 0.5) * 2,
+        // Every puff is pushed leeward by the wind, and older puffs have had
+        // longer to drift, so the exhaust column visibly bows downwind instead
+        // of standing up as a dead-vertical industrial smokestack while the
+        // HUD dial insists there is a crosswind.
+        vx: (vrng() - 0.5) * 20 - this.vx * 0.03 + this.wind * 22,
+        vy: 12 + vrng() * 14 - this.vy * 0.03,
+        gravity: -16, drag: 0.75,
+        // Strong growth over life: near the shell the puffs are small and
+        // tight, back at the barrel they have bloomed to ~3.6x, so the trail
+        // tapers from a fat, ragged root to a crisp head.
+        dur: 1.35 + vrng() * 0.5,
+        size: 18 + vrng() * 9, size1: 104 + vrng() * 34,
+        aspect: 0.82 + vrng() * 0.42,
+        // Temperature gradient: hot exhaust right behind the shell cooling to
+        // grey smoke as it ages.
+        color: '#e6c9a4', color1: '#8f877e', opacity: 0.6 + vrng() * 0.1,
+        fade: 'trail', rot: vrng() * TAU_P, spin: (vrng() - 0.5) * 1.6,
       });
     }
     this._puffCarry = total;
@@ -297,11 +318,19 @@ export class Projectile {
       }
     }
     this.mesh.position.set(this.x, this.y, 40);
-    this.mesh.rotation.z = Math.atan2(this.vy, this.vx);
-    // ~8Hz glow pulse + slowly spinning star halo.
+    const ang = Math.atan2(this.vy, this.vx);
+    this.mesh.rotation.z = ang;
+    // ~8Hz glow pulse + a star flash locked to the velocity vector.
     const pulse = 1 + Math.sin(this._age * 50) * 0.1;
-    this.glow.scale.set(92 * pulse, 92 * pulse, 1);
-    this._halo.material.rotation = this._age * 3.5;
+    const gs = 69 * pulse;
+    this.glow.position.set(this.x, this.y, 38.5);
+    this.glow.scale.set(gs, gs, 1);
+    this._halo.position.set(this.x, this.y, 41);
+    this._halo.material.rotation = ang + this._age * 1.2;
+    const nx = this.x + Math.cos(ang) * 7, ny = this.y + Math.sin(ang) * 7;
+    this._nose.position.set(nx, ny, 41);
+    const ns = 16 * (1 + Math.sin(this._age * 50 + 1.2) * 0.12);
+    this._nose.scale.set(ns, ns, 1);
     this._updateTrail();
     this._emitSparks(dt);
     this._emitPuffs(dt);
@@ -310,7 +339,12 @@ export class Projectile {
 
   finish() {
     this.done = true;
+    fxNoteVelocity(this.vx, this.vy); // blast leans along the shell's travel
     this.scene.remove(this.mesh);
+    for (const s of [this.glow, this._halo, this._nose]) {
+      if (s) { this.scene.remove(s); s.material.dispose(); }
+    }
+    this.glow = this._halo = this._nose = null;
     this.scene.remove(this.trailMesh);
     this.trailMesh.geometry.dispose();
     this.trailMesh.material.dispose();
