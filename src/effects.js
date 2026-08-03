@@ -92,6 +92,38 @@ export function fxTextures() {
     ctx.fillRect(0, 0, 128, 128);
   });
 
+  // Cel smoke puff — an OPAQUE cauliflower blob with a dark rim and a
+  // top-lit / bottom-shaded body. The soft `smoke` texture above turns into a
+  // low-contrast brown murk when a lot of it stacks over a bright sky; this
+  // one keeps a chunky readable silhouette, which is what sells a lingering
+  // smoke column or a muzzle cloud in a cartoon artillery game.
+  const puff = canvasTex(128, (ctx) => {
+    const pts = 40;
+    ctx.beginPath();
+    for (let i = 0; i <= pts; i++) {
+      const a = (i / pts) * TAU;
+      const wob = 1
+        + 0.13 * Math.sin(a * 4 + 0.9)
+        + 0.09 * Math.sin(a * 7 + 3.4)
+        + 0.05 * Math.sin(a * 11 + 1.2);
+      const rr = 46 * wob;
+      const px = 64 + Math.cos(a) * rr;
+      const py = 64 + Math.sin(a) * rr;
+      if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+    // Near-white body so the per-particle tint (multiply) controls the value.
+    const g = ctx.createLinearGradient(0, 14, 0, 118);
+    g.addColorStop(0, '#ffffff');
+    g.addColorStop(0.45, '#ddd8d1');
+    g.addColorStop(1, '#9d968e');
+    ctx.fillStyle = g;
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(74,68,62,0.4)';
+    ctx.lineWidth = 2.5;
+    ctx.stroke();
+  });
+
   // Fireball: baked color ramp (cream core -> yellow -> orange -> deep red rim)
   // with blobby lobes so overlapping sprites read as rolling flame, not a ball.
   // Drawn with NORMAL blending so stacked copies can never clip to white.
@@ -99,31 +131,62 @@ export function fxTextures() {
   // -> #ff8c1a -> #d33 with a noise-wobbled outline and a dark rim stroke.
   // No interior alpha blobs, so stacked copies read as chunky cartoon flame,
   // never semi-transparent mush.
-  const fire = canvasTex(128, (ctx) => {
+  // Wobbled cel-blob path shared by both fire sprites.
+  const fireBlob = (ctx, phase) => {
     const pts = 26;
     ctx.beginPath();
     for (let i = 0; i <= pts; i++) {
       const a = (i / pts) * TAU;
-      const wob = 1 + 0.1 * Math.sin(a * 3 + 1.7) + 0.08 * Math.sin(a * 5 + 4.2) + 0.05 * Math.sin(a * 8 + 2.1);
+      const wob = 1
+        + 0.1 * Math.sin(a * 3 + 1.7 + phase)
+        + 0.08 * Math.sin(a * 5 + 4.2 + phase)
+        + 0.05 * Math.sin(a * 8 + 2.1);
       const rr = 52 * wob;
       const px = 64 + Math.cos(a) * rr;
       const py = 64 + Math.sin(a) * rr;
       if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
     }
     ctx.closePath();
-    const g = ctx.createRadialGradient(64, 62, 0, 64, 64, 60);
-    g.addColorStop(0, '#ffffff');       // blown-out white-hot core
-    g.addColorStop(0.2, '#ffee9a');
-    g.addColorStop(0.34, '#ffe66a');
-    g.addColorStop(0.56, '#ff8c1a');
-    g.addColorStop(0.8, '#d33920');
-    g.addColorStop(1, '#8a2414');
+  };
+
+  // OUTER fire puff — carries the chunky silhouette, so it keeps a thin dark
+  // cel rim. The ramp is deliberately hot for most of the radius (yellow out
+  // to ~50%) so stacked puffs read as flame, not as brown clods: white ->
+  // #ffe066 -> orange -> #c0392b rim.
+  const fire = canvasTex(128, (ctx) => {
+    fireBlob(ctx, 0);
+    const g = ctx.createRadialGradient(64, 60, 0, 64, 64, 60);
+    g.addColorStop(0, '#fffdf3');       // blown-out white-hot core
+    g.addColorStop(0.16, '#fff4ba');
+    g.addColorStop(0.34, '#ffe066');
+    g.addColorStop(0.55, '#ffab2e');
+    g.addColorStop(0.76, '#f4661f');
+    g.addColorStop(0.93, '#d0391c');
+    g.addColorStop(1, '#c0392b');
     ctx.fillStyle = g;
     ctx.fill();
-    // Dark cel rim so every blob keeps edge definition against sky and smoke.
-    ctx.strokeStyle = 'rgba(96,26,14,0.95)';
-    ctx.lineWidth = 3.5;
+    // Thin dark cel rim: enough edge definition against sky, not enough to
+    // turn a pile of overlapping puffs into mud.
+    ctx.strokeStyle = 'rgba(124,38,20,0.8)';
+    ctx.lineWidth = 2.4;
     ctx.stroke();
+  });
+
+  // CORE fire puff — the focal blob. No dark rim at all and a much hotter
+  // ramp, with a soft transparent lip so it melts into the outer puffs
+  // instead of stamping a hard circle over them.
+  const fireCore = canvasTex(128, (ctx) => {
+    fireBlob(ctx, 2.4);
+    const g = ctx.createRadialGradient(64, 58, 0, 64, 64, 62);
+    g.addColorStop(0, '#ffffff');
+    g.addColorStop(0.2, '#fffbe0');
+    g.addColorStop(0.4, '#ffe066');
+    g.addColorStop(0.6, '#ffab2e');
+    g.addColorStop(0.8, '#f4661f');
+    g.addColorStop(0.93, 'rgba(200,58,30,0.85)');
+    g.addColorStop(1, 'rgba(176,44,22,0)');
+    ctx.fillStyle = g;
+    ctx.fill();
   });
 
   // Burst: 6 tapered wedge rays — fat at the core, sharp tips — replacing the
@@ -222,7 +285,7 @@ export function fxTextures() {
     ctx.fill();
   });
 
-  _tex = { glow, spark, ring, shock, smoke, star, fire, burst };
+  _tex = { glow, spark, ring, shock, smoke, puff, star, fire, fireCore, burst };
   return _tex;
 }
 
@@ -265,8 +328,10 @@ export class Effects {
       star: sprite(T.star, { blending: THREE.AdditiveBlending }),
       burst: sprite(T.burst, { blending: THREE.AdditiveBlending }),
       smoke: this.smokeMat,
+      puff: sprite(T.puff, { color: '#a49b91', opacity: 0.8 }),
       fire: sprite(T.fire),
-      fireAdd: sprite(T.fire, { blending: THREE.AdditiveBlending }),
+      fireCore: sprite(T.fireCore),
+      fireAdd: sprite(T.fireCore, { blending: THREE.AdditiveBlending }),
     };
 
     this._debrisGeo = new THREE.DodecahedronGeometry(1);
@@ -292,17 +357,41 @@ export class Effects {
       const world = GB.world;
       const orig = world.follow.bind(world);
       const self = this;
+      // Snap the smoothed camera position a fraction of the way to the
+      // (clamped) target this frame. Used only for the impact push-in, where
+      // world's own ~10%/frame lerp is far too slow to land the blast in the
+      // middle of the frame while the fireball is still alive.
+      const converge = (k) => {
+        const t = world._clampView({
+          x: world.target.x, y: world.target.y, zoom: world.target.zoom,
+        });
+        world.pos.x += (t.x - world.pos.x) * k;
+        world.pos.y += (t.y - world.pos.y) * k;
+        world.pos.zoom += (t.zoom - world.pos.zoom) * k;
+      };
+
       world.follow = function follow(fx, fy, wide) {
         try {
           const game = GB.game;
           const st = game.state;
           const m = game.active;
-          // Aftermath dwell: for ~2s after a blast, stay ON the crater —
-          // smoke column, scorch and settling debris are the payoff shot.
+          // Impact beat: push IN hard and centre the blast for ~0.6s, then
+          // ease back out to an aftermath framing that keeps the crater, the
+          // smoke column and the ground it sits on all in shot.
           const imp = self._impact;
-          if (imp && st !== 'flying' && st !== 'charging' && self._time - imp.t < 2.0) {
-            orig(imp.x, Math.max(imp.y, 40), false);
-            world.target.zoom = 1010;
+          const age = imp ? self._time - imp.t : 1e9;
+          if (imp && st !== 'flying' && st !== 'charging' && age < 2.2) {
+            if (age < 0.6) {
+              // Punch-in: blast dead centre, tight.
+              orig(imp.x, imp.y, false);
+              world.target.zoom = 900;
+              converge(0.26);
+            } else {
+              // Aftermath: pull back and sit a little low so the smoke column
+              // rises through the top of frame and terrain anchors the bottom.
+              orig(imp.x, Math.max(imp.y - 70, 20), false);
+              world.target.zoom = 1260;
+            }
             return;
           }
           if ((st === 'aim' || st === 'charging') && m && !m.isAI && self._cam.aimT > 0) {
@@ -312,8 +401,12 @@ export class Effects {
             return;
           }
           orig(fx, fy, wide);
-          if (st === 'flying') world.target.zoom = 1500;
-          else if (st === 'resolving') world.target.zoom = 1010;
+          // Flight framing: world clamps camera.x so the frustum stays inside
+          // the art, which at a very wide zoom pins the camera near x=0 and
+          // strands the shell in the left third. A tighter flight zoom buys
+          // back the pan range that lets the shell ride near centre frame.
+          if (st === 'flying') world.target.zoom = 1150;
+          else if (st === 'resolving') world.target.zoom = 1150;
         } catch (e) {
           orig(fx, fy, wide);
         }
@@ -410,17 +503,18 @@ export class Effects {
 
     // 2) White-hot core — HOLDS through the 0.15s peak-flash still, so the
     //    center of the fireball is always blown out white -> #ffe066 yellow.
-    this._p({ tex: 'glow', x, y, z: 52, dur: 0.34, size: radius * 1.3, size1: radius * 1.85, color: '#ffe066', fade: 'fire' });
-    this._p({ tex: 'glow', x, y, z: 52, dur: 0.3, size: radius * 0.95, size1: radius * 1.4, color: '#ffffff', fade: 'fire' });
+    this._p({ tex: 'glow', x, y, z: 52, dur: 0.34, size: radius * 1.2, size1: radius * 1.7, color: '#ffe066', fade: 'fire' });
+    this._p({ tex: 'glow', x, y, z: 52, dur: 0.3, size: radius * 0.7, size1: radius * 1.0, color: '#ffffff', fade: 'fire' });
 
     // 3) Tapered wedge rays (fat at core, sharp tips, capped ~1.5x fireball).
-    this._p({ tex: 'burst', x, y, z: 51, dur: 0.25, size: radius * 1.6, size1: radius * 2.1, color: '#ffe0a0', opacity: 0.95, fade: 'out', rot: rng() * TAU, spin: 0.5 });
+    this._p({ tex: 'burst', x, y, z: 51, dur: 0.3, size: radius * 2.0, size1: radius * 2.9, color: '#ffe0a0', opacity: 0.95, fade: 'out', rot: rng() * TAU, spin: 0.5 });
 
     // 4) Concussion wave: thin CRISP expanding annulus (white core stroke with
     //    an orange fringe), dying as it grows — the 0.15s still catches it
-    //    mid-expansion as a hard ring, never a filled bubble.
-    this._p({ tex: 'shock', x, y, z: 53, dur: 0.3, size: radius * 1.0, size1: radius * 3.6, opacity: 0.95, fade: 'out' });
-    this._p({ tex: 'shock', x, y, z: 50, delay: 0.06, dur: 0.3, size: radius * 0.7, size1: radius * 2.6, color: '#ffb35c', opacity: 0.5, fade: 'out' });
+    //    mid-expansion as a hard ring well clear of the fireball, never a
+    //    filled bubble hugging it.
+    this._p({ tex: 'shock', x, y, z: 53, dur: 0.42, size: radius * 1.1, size1: radius * 5.2, opacity: 0.95, fade: 'out' });
+    this._p({ tex: 'shock', x, y, z: 50, delay: 0.07, dur: 0.36, size: radius * 0.8, size1: radius * 3.4, color: '#ffb35c', opacity: 0.55, fade: 'out' });
 
     // 5) Blast light: warm halo behind everything so nearby terrain catches
     //    orange light. Kept TIGHT and short — at 2.8x it used to read as a
@@ -432,27 +526,29 @@ export class Effects {
     //    Blob sizes vary 0.6-1.4x and tints jitter warm so it never reads as
     //    one stamped sprite.
     const TINTS = ['#ffffff', '#fff2d4', '#ffe4c0', '#ffd8c8'];
-    this._p({
-      tex: 'fire', x, y, z: 49, dur: 0.55, spin: 0.7, rot: rng() * TAU,
-      size: radius * 1.35, size1: radius * 2.15,
-      color: '#ffffff', color1: '#8a6a55', fade: 'fire',
-    });
-    for (let i = 0; i < 9; i++) {
-      const a = rng() * TAU, v = 55 + rng() * 115;
-      const bs = 0.42 + rng() * 0.55; // 0.6-1.4x of the mean blob
+    // Outer puffs FIRST (lower z) so they build a chunky rimmed silhouette;
+    // the rimless hot core blob then sits on top and owns the focal point.
+    for (let i = 0; i < 11; i++) {
+      const a = rng() * TAU, v = 70 + rng() * 150;
+      const bs = 0.6 + rng() * 0.7; // 0.6-1.3x of the mean blob
       this._p({
         tex: 'fire',
-        x: x + (rng() - 0.5) * radius * 0.34, y: y + (rng() - 0.5) * radius * 0.3, z: 48 + (i % 2),
-        vx: Math.cos(a) * v, vy: Math.sin(a) * v + 45, gravity: -50, drag: 1.4,
-        dur: 0.38 + rng() * 0.28, size: radius * bs, size1: radius * (bs * 1.9 + 0.15),
-        color: TINTS[i % TINTS.length], color1: '#7c6a5c', fade: 'fire',
+        x: x + (rng() - 0.5) * radius * 0.55, y: y + (rng() - 0.5) * radius * 0.5, z: 47 + (i % 2),
+        vx: Math.cos(a) * v, vy: Math.sin(a) * v + 50, gravity: -50, drag: 1.4,
+        dur: 0.42 + rng() * 0.3, size: radius * bs, size1: radius * (bs * 2.05 + 0.2),
+        color: TINTS[i % TINTS.length], color1: '#8c7566', fade: 'fire',
         rot: rng() * TAU, spin: (rng() - 0.5) * 2,
       });
     }
+    this._p({
+      tex: 'fireCore', x, y, z: 49, dur: 0.58, spin: 0.7, rot: rng() * TAU,
+      size: radius * 1.7, size1: radius * 2.9,
+      color: '#ffffff', color1: '#a08272', fade: 'fire',
+    });
     // Low-opacity additive accents feed the bloom with ORANGE light only, and
     // an additive white heart blooms the focal point of the blast.
-    this._p({ tex: 'fireAdd', x, y, z: 50, dur: 0.45, size: radius * 1.4, size1: radius * 2.3, color: '#ffab45', opacity: 0.55, fade: 'out' });
-    this._p({ tex: 'glow', x, y, z: 50, dur: 0.28, size: radius * 0.7, size1: radius * 1.0, color: '#ffffff', opacity: 0.85, fade: 'fire' });
+    this._p({ tex: 'fireAdd', x, y, z: 50, dur: 0.48, size: radius * 1.5, size1: radius * 2.6, color: '#ffab45', opacity: 0.5, fade: 'out' });
+    this._p({ tex: 'glow', x, y, z: 50, dur: 0.3, size: radius * 0.62, size1: radius * 0.9, color: '#ffffff', opacity: 0.85, fade: 'fire' });
 
     // Hot spark streaks — few, fat, and short so they read as embers, not
     // hairline lens-flare spikes.
@@ -485,43 +581,48 @@ export class Effects {
     for (let i = 0; i < 12; i++) {
       const a = rng() * TAU, r = rng() * radius * 0.5, v = 30 + rng() * 60;
       this._p({
-        tex: 'smoke',
+        tex: 'puff',
         x: x + Math.cos(a) * r, y: y + Math.abs(Math.sin(a)) * r, z: 43 + (i % 3),
         vx: Math.cos(a) * v + wind * 22, vy: 60 + rng() * 90, gravity: -28, drag: 1.0,
         delay: 0.08 + rng() * 0.3, dur: 3.0 + rng() * 1.7,
-        size: radius * (0.7 + rng() * 0.5), size1: radius * (2.8 + rng() * 1.4),
-        color: SMOKE_TINTS[i % SMOKE_TINTS.length], color1: '#b3aca3',
-        opacity: 0.7 + rng() * 0.12,
+        size: radius * (0.7 + rng() * 0.5), size1: radius * (2.1 + rng() * 1.0),
+        color: SMOKE_TINTS[i % SMOKE_TINTS.length], color1: '#c6c0b7',
+        opacity: 0.82 + rng() * 0.1,
         fade: 'smoke', spin: (rng() - 0.5) * 1.4, rot: rng() * TAU,
       });
     }
-    // Rising column — puff-chain that keeps a tall dark smoke pillar over the
-    // crater for the whole aftermath beat (~5s), lightening as it climbs.
-    for (let i = 0; i < 9; i++) {
+    // Rising column — a dense puff-chain stacked vertically over the crater.
+    // Deliberately tight in x and high-contrast: a readable cartoon pillar,
+    // not a haze. Puffs are launched in quick succession (0.16s apart) so the
+    // whole column already exists at the ~1.5s aftermath beat.
+    for (let i = 0; i < 14; i++) {
+      const t = i / 13;
       this._p({
-        tex: 'smoke',
-        x: x + (rng() - 0.5) * radius * 0.5, y: y - radius * 0.1 + i * radius * 0.12, z: 42,
-        vx: (rng() - 0.5) * 16 + wind * 18, vy: 48 + rng() * 32, gravity: -14, drag: 0.4,
-        delay: 0.3 + i * 0.42 + rng() * 0.2, dur: 3.2 + rng() * 1.5,
-        size: radius * (0.55 + rng() * 0.4), size1: radius * (2.0 + rng() * 1.1),
-        color: '#4f4840', color1: '#a9a29a', opacity: 0.68,
-        fade: 'smoke', spin: (rng() - 0.5) * 0.8, rot: rng() * TAU,
+        tex: 'puff',
+        x: x + (rng() - 0.5) * radius * 0.35 + wind * 6 * i,
+        y: y - radius * 0.1 + i * radius * 0.26, z: 42,
+        vx: (rng() - 0.5) * 12 + wind * 14, vy: 40 + rng() * 24, gravity: -10, drag: 0.35,
+        delay: 0.14 + i * 0.13 + rng() * 0.07, dur: 3.6 + rng() * 1.4,
+        size: radius * (0.62 + 0.5 * t + rng() * 0.28),
+        size1: radius * (1.5 + 1.3 * t + rng() * 0.6),
+        // Sooty and heavy at the base, pale and airy at the top of the column.
+        color: t < 0.45 ? '#6f6156' : '#9c948a', color1: '#cfc9c1',
+        opacity: 0.9 - 0.14 * t,
+        fade: 'smoke', spin: (rng() - 0.5) * 0.7, rot: rng() * TAU,
       });
     }
-    // Wide drifting dust pall — huge, slow, low-alpha sheets that ride the
-    // wind and spread far from the crater, so the aftermath reads even when
-    // the impact point ends up at the very edge of the next-turn framing.
-    for (let i = 0; i < 4; i++) {
-      // Blast-driven spread: alternating sideways push plus wind ride, so the
-      // pall widens symmetrically around the crater instead of one thin puff.
+    // Low drifting dust pall — kept LOW (hugging the blast height) and modest
+    // in size/alpha. Earlier versions used huge 8x sheets that washed the sky
+    // into a dirty brown smear instead of reading as ground dust.
+    for (let i = 0; i < 3; i++) {
       const dir = i % 2 ? -1 : 1;
       this._p({
-        tex: 'smoke',
-        x: x + dir * radius * (0.3 + rng() * 0.5), y: y + radius * (0.3 + rng() * 0.4), z: 41,
-        vx: dir * (34 + rng() * 30) + wind * 24, vy: 22 + rng() * 18, gravity: -8, drag: 0.2,
-        delay: 0.35 + i * 0.3, dur: 4.4 + rng() * 1.0,
-        size: radius * (2.6 + rng() * 0.8), size1: radius * (8.2 + rng() * 1.8),
-        aspect: 0.72, color: '#6a625a', color1: '#aaa39a', opacity: 0.46,
+        tex: 'puff',
+        x: x + dir * radius * (0.3 + rng() * 0.5), y: y - radius * (0.1 + rng() * 0.3), z: 41,
+        vx: dir * (30 + rng() * 26) + wind * 20, vy: 12 + rng() * 12, gravity: -4, drag: 0.3,
+        delay: 0.28 + i * 0.28, dur: 3.6 + rng() * 0.8,
+        size: radius * (1.2 + rng() * 0.5), size1: radius * (3.0 + rng() * 0.8),
+        aspect: 0.66, color: '#9a9189', color1: '#c6c0b8', opacity: 0.5,
         fade: 'smoke', spin: (rng() - 0.5) * 0.4, rot: rng() * TAU,
       });
     }
@@ -600,24 +701,28 @@ export class Effects {
     // connecting cause (the shot) to effect (the shell in the sky).
     const wind = (typeof window !== 'undefined' && window.__GB && window.__GB.game)
       ? window.__GB.game.wind : 0;
-    for (let i = 0; i < 9; i++) {
-      const ja = angle + (rng() - 0.5) * 0.7, v = 22 + rng() * 46;
+    for (let i = 0; i < 12; i++) {
+      const ja = angle + (rng() - 0.5) * 0.8, v = 26 + rng() * 52;
       this._p({
-        tex: 'smoke', x: x + dx * (8 + i * 7), y: y + dy * (8 + i * 7), z: 44,
-        vx: Math.cos(ja) * v + wind * 10, vy: Math.sin(ja) * v + 30, gravity: -24, drag: 1.4,
-        delay: i * 0.05, dur: 1.7 + rng() * 1.0, size: 18 + rng() * 12, size1: 58 + rng() * 26,
-        color: '#948b80', color1: '#c2bbb1', opacity: 0.62,
+        tex: 'puff', x: x + dx * (6 + i * 6), y: y + dy * (6 + i * 6), z: 44,
+        vx: Math.cos(ja) * v + wind * 10, vy: Math.sin(ja) * v + 26, gravity: -22, drag: 1.4,
+        delay: i * 0.04, dur: 1.9 + rng() * 1.0, size: 24 + rng() * 14, size1: 80 + rng() * 30,
+        color: '#9c9288', color1: '#cbc5bc', opacity: 0.82,
         fade: 'smoke', rot: rng() * TAU, spin: (rng() - 0.5) * 1.6,
       });
     }
-    // Scorch puff right at the muzzle mouth: one darker, slower blob.
-    this._p({
-      tex: 'smoke', x: x + dx * 6, y: y + dy * 6, z: 45,
-      vx: dx * 14 + wind * 8, vy: dy * 14 + 22, gravity: -16, drag: 1.2,
-      dur: 2.2 + rng() * 0.6, size: 16, size1: 52,
-      color: '#6d655b', color1: '#a59d93', opacity: 0.6,
-      fade: 'smoke', rot: rng() * TAU, spin: (rng() - 0.5),
-    });
+    // Scorch puffs right at the muzzle mouth: darker, slower, fatter blobs
+    // that guarantee the shooter is still visibly smoking at the mid-flight
+    // beat — cause (the shot) stays connected to effect (the shell in flight).
+    for (let i = 0; i < 3; i++) {
+      this._p({
+        tex: 'puff', x: x + dx * (4 + i * 5) + (rng() - 0.5) * 10, y: y + dy * (4 + i * 5) + (rng() - 0.5) * 8, z: 45,
+        vx: dx * 16 + wind * 8 + (rng() - 0.5) * 14, vy: dy * 16 + 20, gravity: -14, drag: 1.2,
+        delay: i * 0.06, dur: 2.4 + rng() * 0.7, size: 26 + rng() * 10, size1: 74 + rng() * 22,
+        color: '#7b7268', color1: '#b6afa6', opacity: 0.85,
+        fade: 'smoke', rot: rng() * TAU, spin: (rng() - 0.5),
+      });
+    }
     this.shake = Math.min(1.6, this.shake + 0.12);
   }
 
@@ -670,8 +775,9 @@ export class Effects {
         transparent: true,
       });
       const m = new THREE.Mesh(this._debrisGeo, mat);
-      // Wide 0.5-1.6x scale variance: a few big chunks among the grit.
-      const s = (2.2 + rng() * rng() * 7.0) * R;
+      // Wide scale variance: a few properly chunky clods among the grit, so
+      // the thrown mass reads as demolished ground and not as crumbs.
+      const s = (3.2 + rng() * rng() * 9.5) * R;
       m.scale.set(s * (0.7 + rng() * 0.6), s, s * (0.7 + rng() * 0.6));
       m.position.set(x + (rng() - 0.5) * radius * 0.4, y + (rng() - 0.3) * radius * 0.3, 41);
       m.rotation.set(rng() * TAU, rng() * TAU, rng() * TAU);
@@ -690,14 +796,14 @@ export class Effects {
     }
     // Dirt / sod motion smears: normal-blended velocity-aligned streaks in the
     // terrain palette, so a frozen frame reads flying earth, not confetti.
-    for (let i = 0; i < Math.round(7 + 3 * R); i++) {
+    for (let i = 0; i < Math.round(12 + 5 * R); i++) {
       const a = Math.PI * (0.12 + 0.76 * rng());
-      const v = 200 + rng() * 300;
+      const v = 200 + rng() * 320;
       const grass = rng() < 0.3;
       this._p({
         tex: 'streak', x: x + (rng() - 0.5) * radius * 0.3, y, z: 46,
         vx: Math.cos(a) * v * (rng() > 0.5 ? 1 : -1), vy: Math.sin(a) * v, gravity: 950,
-        dur: 0.4 + rng() * 0.35, size: 9 + rng() * 8,
+        dur: 0.45 + rng() * 0.35, size: 12 + rng() * 10,
         color: grass ? '#4f9838' : (rng() > 0.5 ? '#7a5a38' : '#5d4228'),
         opacity: 0.9, stretch: 0.008,
       });

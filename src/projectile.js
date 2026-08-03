@@ -68,7 +68,7 @@ export class Projectile {
       map: T.glow, color: '#ffab4a', transparent: true, opacity: 0.95,
       blending: THREE.AdditiveBlending, depthWrite: false,
     }));
-    this.glow.scale.set(74, 74, 1);
+    this.glow.scale.set(92, 92, 1);
     this.glow.renderOrder = 30; // above the sea plane (renderOrder 8)
     this.mesh.add(this.glow);
 
@@ -202,20 +202,25 @@ export class Projectile {
     const px = this._puffPX ?? this.x, py = this._puffPY ?? this.y;
     const dx = this.x - px, dy = this.y - py;
     const dist = Math.hypot(dx, dy);
-    const STEP = 13; // world units between puffs (~5 puffs per shell length)
+    const STEP = 15; // world units between puffs (puffs are ~17u wide at spawn)
     let total = (this._puffCarry ?? 0) + dist;
     while (total >= STEP) {
       total -= STEP;
       const t = dist > 0 ? 1 - total / dist : 0;
       const sx = px + dx * t, sy = py + dy * t;
       fxSpawn({
-        tex: 'smoke',
+        // Cel puff, not the soft gradient blob: the trail has to read as a
+        // chunky chain of smoke balls, which is what makes a GunBound shot
+        // legible from across the room.
+        tex: 'puff',
         x: sx + (vrng() - 0.5) * 7, y: sy + (vrng() - 0.5) * 7, z: 37,
         vx: (vrng() - 0.5) * 24 - this.vx * 0.03 + this.wind * 6,
         vy: 14 + vrng() * 16 - this.vy * 0.03,
         gravity: -18, drag: 1.2,
-        dur: 0.9 + vrng() * 0.45, size: 12 + vrng() * 7, size1: 36 + vrng() * 16,
-        color: '#9a9083', color1: '#c4bcb1', opacity: 0.68,
+        // Fat puffs: the trail has to be readable from across the room, so
+        // each puff blows up to ~4x its spawn size over its life.
+        dur: 1.0 + vrng() * 0.5, size: 15 + vrng() * 8, size1: 52 + vrng() * 20,
+        color: '#a89e92', color1: '#d0cac1', opacity: 0.8,
         fade: 'trail', rot: vrng() * TAU_P, spin: (vrng() - 0.5) * 2,
       });
     }
@@ -295,7 +300,7 @@ export class Projectile {
     this.mesh.rotation.z = Math.atan2(this.vy, this.vx);
     // ~8Hz glow pulse + slowly spinning star halo.
     const pulse = 1 + Math.sin(this._age * 50) * 0.1;
-    this.glow.scale.set(74 * pulse, 74 * pulse, 1);
+    this.glow.scale.set(92 * pulse, 92 * pulse, 1);
     this._halo.material.rotation = this._age * 3.5;
     this._updateTrail();
     this._emitSparks(dt);

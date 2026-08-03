@@ -193,7 +193,7 @@ export class UI {
             0 4px 12px rgba(0,0,0,0.55);
         }
         #hud .wind {
-          position: relative; width: 84px; height: 84px; border-radius: 50%;
+          position: relative; width: 94px; height: 94px; border-radius: 50%;
           background:
             radial-gradient(circle at 50% 34%, #46599c 0%, #2a3668 44%, #161d3d 80%, #0c1128 100%);
           border: 2px solid #e8b64a;
@@ -209,7 +209,7 @@ export class UI {
         #hud .windSvg .needleG {
           transform-box: view-box; transform-origin: 50% 50%;
           transition: transform 0.45s cubic-bezier(.34,1.4,.64,1), opacity 0.3s;
-          filter: drop-shadow(0 2px 2px rgba(0,0,0,0.55));
+          filter: drop-shadow(0 2px 3px rgba(0,0,0,0.7));
         }
         /* 0.8s ease pulse retriggered on every wind change */
         #hud .wind.pulse { animation: windPulse 0.8s cubic-bezier(.34,1.5,.64,1); }
@@ -232,14 +232,14 @@ export class UI {
         }
         #hud .windBadge {
           position: absolute; left: 50%; top: 50%; z-index: 1;
-          width: 34px; height: 34px; transform: translate(-50%,-50%);
+          width: 36px; height: 36px; transform: translate(-50%,-50%);
           display: flex; align-items: center; justify-content: center;
           border-radius: 50%;
           background: radial-gradient(circle at 50% 30%, #2e3c78, #1a2350 55%, #0d1230 95%);
           border: 2px solid #e8b64a;
           box-shadow: 0 0 0 1px #6b4a12, inset 0 2px 4px rgba(0,0,0,0.7),
             inset 0 -1px 0 rgba(120,160,255,0.25), 0 2px 6px rgba(0,0,0,0.6);
-          color: var(--gold); font-weight: 800; font-size: 20px; line-height: 1;
+          color: var(--gold); font-weight: 800; font-size: 22px; line-height: 1;
           text-shadow: 0 1px 0 #000, 0 0 6px rgba(0,0,0,0.8);
           font-family: 'Baloo 2', 'Trebuchet MS', sans-serif;
         }
@@ -272,12 +272,22 @@ export class UI {
         }
         /* rival-turn hand-off: console visibly stands down */
         #hud .console.waiting { opacity: 0.78; }
+        /* WAIT: clearly stood-down, but still a moulded button (keeps bevel,
+           specular and rim so it never reads as a flat dead blob). */
         #hud .console.waiting .fireBtn {
-          filter: grayscale(0.72) brightness(0.82);
-          box-shadow: 0 0 0 1px rgba(200,200,210,0.25),
-            inset 0 2px 0 rgba(255,255,255,0.4),
-            inset 0 -7px 10px rgba(40,40,60,0.5), 0 3px 8px rgba(0,0,0,0.5);
+          font-size: 13px; letter-spacing: 1.4px;
+          background: radial-gradient(circle at 50% 26%,
+            #efeade 0%, #dcd6c4 20%, #c2bca8 46%, #9c9784 74%, #7d7967 100%);
+          border-color: #2f2c1e; color: #3b3727;
+          text-shadow: 0 1px 0 rgba(255,255,255,0.5), 0 -1px 0 rgba(50,46,32,0.3);
+          box-shadow: 0 0 0 1px rgba(225,220,200,0.35),
+            inset 0 2px 0 rgba(255,255,255,0.6),
+            inset 0 -2px 0 rgba(70,64,46,0.85),
+            inset 0 -9px 14px rgba(60,55,42,0.45),
+            inset 0 8px 10px rgba(255,255,255,0.22),
+            0 4px 10px rgba(0,0,0,0.5);
         }
+        #hud .console.waiting .fireBtn::before { opacity: 0.6; }
         /* full-bleed navy baseboard docking the console to the bottom edge */
         #hud .baseboard {
           position: absolute; left: 0; right: 0; bottom: 0; height: 14px;
@@ -462,8 +472,8 @@ export class UI {
         #hud .powerNums { position: absolute; inset: 2px 4px; pointer-events: none; }
         #hud .powerNums span {
           position: absolute; top: 0; transform: translateX(-50%);
-          font-size: 8px; font-weight: 800; letter-spacing: 0.5px; line-height: 1;
-          color: rgba(255,222,120,0.85); text-shadow: 0 1px 2px #000, 0 0 4px rgba(0,0,10,0.9);
+          font-size: 9px; font-weight: 800; letter-spacing: 0.5px; line-height: 1;
+          color: rgba(255,232,150,0.95); text-shadow: 0 1px 2px #000, 0 0 4px rgba(0,0,10,0.9);
         }
         /* slow idle shimmer so the empty gauge reads as powered-on, not dead */
         #hud .powerShine {
@@ -556,24 +566,27 @@ export class UI {
         /* --- chunky glossy FIRE button --- */
         #hud .fireBtn {
           position: relative; overflow: hidden;
-          width: 60px; height: 60px; border-radius: 50%; flex: 0 0 60px;
+          width: 62px; height: 62px; border-radius: 50%; flex: 0 0 62px;
           display: flex; align-items: center; justify-content: center;
-          background: radial-gradient(circle at 50% 30%,
-            #fff3c0 0%, #ffe38a 26%, #ffd05a 52%, #e6a92c 78%, #d9a018 100%);
+          background: radial-gradient(circle at 50% 26%,
+            #fffbe2 0%, #fff0ab 18%, #ffe38a 34%, #ffcf52 58%, #e6a92c 80%, #c98f10 100%);
           border: 2px solid #4a3006;
-          box-shadow: 0 0 0 1px rgba(255,235,170,0.35),
-            inset 0 2px 0 #fff2c0,                       /* rim bevel: light top */
+          box-shadow: 0 0 0 1px rgba(255,235,170,0.55),
+            0 0 0 4px rgba(255,215,94,0.16),             /* soft gold halo */
+            inset 0 2px 0 #fff8d8,                       /* rim bevel: light top */
             inset 0 -2px 0 #8a5f00,                      /* rim bevel: dark bottom */
-            inset 0 -8px 12px rgba(120,70,10,0.55),
-            0 6px 12px rgba(0,0,0,0.55);
+            inset 0 -9px 14px rgba(120,70,10,0.55),
+            inset 0 8px 10px rgba(255,255,255,0.28),     /* upper inner bounce */
+            0 6px 14px rgba(0,0,0,0.6);
           color: #402c05; font-weight: 800; font-size: 15px; letter-spacing: 1.2px;
           text-shadow: 0 1px 0 rgba(255,255,255,0.55), 0 -1px 0 rgba(90,55,0,0.35);
           transition: filter 0.25s;
         }
         #hud .fireBtn::before { /* specular gloss ellipse across the top third */
-          content: ''; position: absolute; left: 14%; right: 14%; top: 7%; height: 34%;
-          border-radius: 50%;
-          background: linear-gradient(rgba(255,255,255,0.75), rgba(255,255,255,0.05));
+          content: ''; position: absolute; left: 12%; right: 12%; top: 5%; height: 38%;
+          border-radius: 50% 50% 46% 46%;
+          background: linear-gradient(rgba(255,255,255,0.88) 0%,
+            rgba(255,255,255,0.42) 45%, rgba(255,255,255,0.03) 100%);
           pointer-events: none;
         }
         #hud .fireBtn:active, #hud .fireBtn.held {
@@ -610,6 +623,30 @@ export class UI {
             inset 0 -6px 10px rgba(0,0,0,0.35), 0 5px 14px rgba(0,0,0,0.55),
             0 0 16px 3px rgba(255,91,77,0.6);
         }
+        /* Bright turn ring: the unmistakable "whose turn is it" cue. */
+        #hud .pcard::after {
+          content: ''; position: absolute; inset: -5px; border-radius: 16px;
+          border: 2px solid transparent; pointer-events: none;
+          opacity: 0; transition: opacity 0.35s;
+        }
+        /* Near-white ring backed by a dark keyline so it still reads when the
+           card sits against open blue sky. */
+        #hud .pcard.activeYou::after {
+          opacity: 1; border-color: rgba(236,252,255,0.98);
+          box-shadow: 0 0 0 2px rgba(8,16,44,0.8),
+            0 0 20px 6px rgba(120,232,255,0.9),
+            inset 0 0 14px rgba(150,235,255,0.5);
+          animation: cardPulse 1.7s ease-in-out infinite;
+        }
+        #hud .pcard.activeRival::after {
+          opacity: 1; border-color: rgba(255,160,140,0.95);
+          box-shadow: 0 0 18px 5px rgba(255,91,77,0.75),
+            inset 0 0 14px rgba(255,91,77,0.4);
+          animation: cardPulse 1.7s ease-in-out infinite;
+        }
+        @keyframes cardPulse { 50% { opacity: 0.7; } }
+        /* the off-turn card visibly steps back */
+        #hud .pcard.idle { opacity: 0.74; filter: saturate(0.8) brightness(0.92); }
         #hud .pcard.dead { opacity: 0.55; filter: saturate(0.25) brightness(0.8); }
         #hud .pRow { display: flex; align-items: center; gap: 9px; }
         #hud .players.right .pRow { flex-direction: row-reverse; }
@@ -691,40 +728,45 @@ export class UI {
           opacity: 0; pointer-events: none;
         }
         #hud .banner.show { opacity: 1; }
-        /* Full-viewport designed ribbon: navy band + gold keylines, both ends
-           fading to alpha 0 through the same mask so no hard cuts ever show. */
-        #hud .banner .bRibbon {
+        /* Soft scene-darkening halo behind the plaque: pure radial falloff, so
+           there is no edge anywhere for the eye to catch (the old full-bleed
+           ribbon read as a debug overlay slapped over the world). */
+        #hud .banner .bGlow {
+          grid-area: 1 / 1; justify-self: stretch; align-self: center;
+          height: 240px; pointer-events: none;
+          background: radial-gradient(ellipse 30% 58% at 50% 50%,
+            rgba(4,8,24,0.62) 0%, rgba(4,8,24,0.40) 38%,
+            rgba(4,8,24,0.16) 62%, rgba(4,8,24,0) 80%);
+        }
+        #hud .banner.show .bGlow { animation: glowIn 0.4s ease-out both; }
+        @keyframes glowIn { from { opacity: 0; } to { opacity: 1; } }
+        /* Gold-edged hex plaque sized to the text — a designed game banner
+           rather than a strip across the scene. */
+        #hud .banner .bPlaque {
           grid-area: 1 / 1; position: relative;
-          justify-self: stretch; align-self: center;
-          width: 100%; height: 84px;
+          padding: 9px 58px 13px;
+          background: linear-gradient(180deg, #fff0bc 0%, #e8b64a 42%, #a9741a 100%);
+          clip-path: polygon(0% 50%, 30px 0%, calc(100% - 30px) 0%, 100% 50%,
+            calc(100% - 30px) 100%, 30px 100%);
+          filter: drop-shadow(0 6px 14px rgba(0,0,12,0.6));
+        }
+        #hud .banner .bPlaque::before { /* navy face inset inside the gold edge */
+          content: ''; position: absolute; inset: 4px;
           background:
-            linear-gradient(180deg, rgba(38,49,95,0.92) 0%, rgba(16,22,50,0.90) 45%,
-              rgba(10,15,36,0.92) 100%);
-          -webkit-mask-image: linear-gradient(90deg,
-            transparent 0%, #000 14%, #000 86%, transparent 100%);
-          mask-image: linear-gradient(90deg,
-            transparent 0%, #000 14%, #000 86%, transparent 100%);
-          opacity: 0;
+            linear-gradient(180deg, rgba(255,255,255,0.22) 0%,
+              rgba(255,255,255,0.08) 26%, rgba(255,255,255,0) 46%),
+            linear-gradient(180deg, rgba(62,80,150,0.97) 0%,
+              rgba(30,40,84,0.97) 46%, rgba(14,20,46,0.97) 100%);
+          clip-path: polygon(0% 50%, 27px 0%, calc(100% - 27px) 0%, 100% 50%,
+            calc(100% - 27px) 100%, 27px 100%);
         }
-        #hud .banner.show .bRibbon { animation: ribbonIn 0.3s ease-out both; }
-        @keyframes ribbonIn {
-          from { opacity: 0; transform: translateY(-16px) scaleY(0.4); }
-          to   { opacity: 1; transform: translateY(0) scaleY(1); }
-        }
-        #hud .banner .bRibbon::before, #hud .banner .bRibbon::after {
-          content: ''; position: absolute; left: 0; right: 0; height: 2px;
-          background: linear-gradient(180deg, #ffe9a0, #d9a018);
-          box-shadow: 0 1px 3px rgba(0,0,10,0.6);
-        }
-        #hud .banner .bRibbon::before { top: 3px; }
-        #hud .banner .bRibbon::after { bottom: 3px; }
-        #hud .bInner { grid-area: 1 / 1; display: grid; z-index: 1; }
+        #hud .bInner { position: relative; z-index: 1; display: grid; }
         #hud .bInner > span {
           grid-area: 1 / 1; font-size: 56px; font-weight: 800; letter-spacing: 1px;
           text-align: center; white-space: nowrap; line-height: 1.25;
           font-family: 'Baloo 2', 'Trebuchet MS', 'Segoe UI', Verdana, sans-serif;
         }
-        #hud .banner.show .bInner {
+        #hud .banner.show .bPlaque {
           animation: bannerPop 0.55s cubic-bezier(.28,1.65,.5,1) both;
         }
         @keyframes bannerPop {
@@ -734,8 +776,8 @@ export class UI {
           100% { transform: scale(1); opacity: 1; }
         }
         #hud .bStroke {
-          color: #2b1a04; -webkit-text-stroke: 10px #2b1a04;
-          filter: drop-shadow(0 5px 0 rgba(0,0,0,0.45)) drop-shadow(0 8px 22px rgba(0,0,0,0.6));
+          color: #1a1026; -webkit-text-stroke: 8px #1a1026;
+          filter: drop-shadow(0 4px 0 rgba(0,0,0,0.45));
         }
         #hud .bFill {
           position: relative; z-index: 1; /* paint above the filtered stroke layer */
@@ -885,6 +927,12 @@ export class UI {
           #hud .portraitFrame { flex: 0 0 34px; width: 34px; height: 34px; }
           #hud .pname { font-size: 13px; }
           #hud .banner .bInner > span { font-size: 38px; }
+          #hud .banner .bPlaque { padding: 6px 38px 9px; }
+          #hud .banner .bPlaque, #hud .banner .bPlaque::before {
+            clip-path: polygon(0% 50%, 20px 0%, calc(100% - 20px) 0%, 100% 50%,
+              calc(100% - 20px) 100%, 20px 100%);
+          }
+          #hud .bStroke { -webkit-text-stroke-width: 6px; }
           #hud .dmg > span { font-size: 36px; }
         }
       </style>
@@ -901,20 +949,23 @@ export class UI {
               </defs>
               <g class="windTicks"></g>
               <g class="needleG">
-                <g class="windStreaks" stroke="rgba(255,255,255,0.6)"
-                  stroke-width="2.6" stroke-linecap="round">
-                  <line x1="14" y1="27" x2="34" y2="27"/>
-                  <line x1="66" y1="73" x2="86" y2="73"/>
-                  <line x1="8" y1="50" x2="24" y2="50"/>
+                <g class="windStreaks" stroke="rgba(255,255,255,0.4)"
+                  stroke-width="2.2" stroke-linecap="round">
+                  <line x1="8" y1="30" x2="24" y2="30"/>
+                  <line x1="10" y1="70" x2="24" y2="70"/>
+                  <line x1="4" y1="50" x2="14" y2="50"/>
                 </g>
-                <rect class="needleShaft" x="14" y="43.5" width="56" height="13" rx="6.5"
-                  fill="url(#gbWindGrad)" stroke="#101630" stroke-width="3"/>
-                <polygon class="needleFin" points="4,34 28,50 4,66 13,50"
-                  fill="url(#gbWindGrad)" stroke="#101630" stroke-width="3"
+                <!-- One unmistakable arrow: flat-ended shaft into a fat solid
+                     head. Its middle passes behind the opaque number badge, so
+                     what reads at a glance is a plain bar on the upwind side
+                     and a big solid wedge pointing downwind. -->
+                <path class="needleMain"
+                  d="M 9 42.5 L 56 42.5 L 56 16 L 99 50 L 56 84 L 56 57.5 L 9 57.5 Z"
+                  fill="url(#gbWindGrad)" stroke="#101630" stroke-width="3.4"
                   stroke-linejoin="round"/>
-                <polygon class="needleMain" points="58,25 98,50 58,75 67,50"
-                  fill="url(#gbWindGrad)" stroke="#101630" stroke-width="3"
-                  stroke-linejoin="round"/>
+                <path class="needleFin" d="M 16 46 L 44 46"
+                  stroke="rgba(255,255,255,0.45)" stroke-width="2.4" fill="none"
+                  stroke-linecap="round"/>
               </g>
             </svg>
             <div class="gloss"></div>
@@ -928,8 +979,10 @@ export class UI {
       <div class="players right"></div>
 
       <div class="banner">
-        <div class="bRibbon"></div>
-        <div class="bInner"><span class="bStroke"></span><span class="bFill"></span></div>
+        <div class="bGlow"></div>
+        <div class="bPlaque">
+          <div class="bInner"><span class="bStroke"></span><span class="bFill"></span></div>
+        </div>
       </div>
       <div class="dmgLayer"></div>
 
@@ -1097,6 +1150,7 @@ export class UI {
     this._idSet = false;     // console identity portrait painted once
     this._bRaf = 0;          // banner dismiss rAF handle
     this._rivalTurn = false; // console stands down while the rival aims
+    this._turn = null;       // { isYou, activeName } of the current turn
     this._lastT = null;      // last timer value (repainted on turn hand-off)
     this._windLog = [];      // recent wind values for the right-wing chips
     this._round = 0;
@@ -1141,7 +1195,7 @@ export class UI {
     const s = Math.abs(wind);
     this.el.windVal.textContent = s.toFixed(0);
     const t = Math.min(1, s / 9);
-    const scale = s === 0 ? 0.72 : 0.85 + t * 0.28;
+    const scale = s === 0 ? 0.55 : 0.86 + t * 0.12;
     this.el.windArrowWrap.style.transform =
       `rotate(${wind >= 0 ? 0 : 180}deg) scale(${scale})`;
     this.el.windArrowWrap.style.opacity = s === 0 ? 0.4 : 1;
@@ -1152,7 +1206,7 @@ export class UI {
     if (s === 0) { hi = '#c6d2f2'; lo = '#68789f'; }
     this.el.windHi.setAttribute('stop-color', hi);
     this.el.windLo.setAttribute('stop-color', lo);
-    this.el.windStreaks.style.opacity = s === 0 ? '0' : (0.3 + 0.7 * t).toFixed(2);
+    this.el.windStreaks.style.opacity = s === 0 ? '0' : (0.25 + 0.55 * t).toFixed(2);
     // retrigger the 0.8s pulse
     this.el.windDial.classList.remove('pulse');
     void this.el.windDial.offsetWidth;
@@ -1263,13 +1317,18 @@ export class UI {
   // glow — blue for you, red for the rival.
   _setTurnOwner(isYou, activeName) {
     this._rivalTurn = !isYou;
+    // Remembered so cards created later (the very first banner fires before
+    // renderPlayers builds them) still pick up the right turn state.
+    this._turn = { isYou, activeName };
     this.el.console.classList.toggle('waiting', !isYou);
     this.el.fireLabel.textContent = isYou ? 'FIRE' : 'WAIT';
     this.el.timerRing.classList.toggle('rival', !isYou);
     if (this._lastT != null) this.setTimer(this._lastT);
     for (const [n, c] of this._cards) {
-      c.card.classList.toggle('activeYou', isYou && n === activeName);
-      c.card.classList.toggle('activeRival', !isYou && n === activeName);
+      const active = n === activeName;
+      c.card.classList.toggle('activeYou', isYou && active);
+      c.card.classList.toggle('activeRival', !isYou && active);
+      c.card.classList.toggle('idle', !active);
     }
     if (isYou && this.el.roundNum) {
       this._round += 1;
@@ -1362,6 +1421,12 @@ export class UI {
     };
     (m.team === 0 ? this.el.playersLeft : this.el.playersRight).appendChild(card);
     this._cards.set(m.name, c);
+    if (this._turn) {
+      const active = m.name === this._turn.activeName;
+      card.classList.toggle('activeYou', this._turn.isYou && active);
+      card.classList.toggle('activeRival', !this._turn.isYou && active);
+      card.classList.toggle('idle', !active);
+    }
     return c;
   }
 }
