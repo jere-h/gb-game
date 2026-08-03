@@ -635,10 +635,11 @@ export class UI {
         /* ============ compact HUD for small screens ============ */
         @media (max-width: 980px) {
           #hud .console {
-            width: calc(100vw - 190px);
+            width: calc(100vw - 320px);
             padding: 8px 12px 9px;
             border-radius: 14px 14px 0 0;
           }
+          #hud .tbtn { width: 54px; height: 54px; font-size: 20px; }
           #hud .console .idBox, #hud .console .slotsBox { display: none; }
           #hud .angle { font-size: 22px; }
           #hud .ledScreen { min-width: 72px; }
