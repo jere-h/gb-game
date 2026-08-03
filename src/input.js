@@ -1,6 +1,8 @@
 // Keyboard input, polled per-frame so held keys feel smooth.
 // Arrows move/aim (A/D/W/S are aliases), hold Space to charge and release to
 // fire, Enter fires instantly at full charge.
+// Touch controls call press()/release() with the same key codes, so virtual
+// buttons behave exactly like held keys.
 
 const ALIAS = { KeyA: 'ArrowLeft', KeyD: 'ArrowRight', KeyW: 'ArrowUp', KeyS: 'ArrowDown' };
 const HANDLED = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Space', 'Enter'];
@@ -12,16 +14,26 @@ export class Input {
     window.addEventListener('keydown', (e) => {
       const code = ALIAS[e.code] || e.code;
       if (HANDLED.includes(code)) e.preventDefault();
-      if (code === 'Space' && !this.keys.has('Space')) game.input('chargeStart');
       if (code === 'Enter' && !e.repeat) game.input('fireFull');
-      this.keys.add(code);
+      this.press(code);
     });
     window.addEventListener('keyup', (e) => {
-      const code = ALIAS[e.code] || e.code;
-      this.keys.delete(code);
-      if (code === 'Space') game.input('chargeRelease');
+      this.release(ALIAS[e.code] || e.code);
     });
-    window.addEventListener('blur', () => this.keys.clear());
+    window.addEventListener('blur', () => {
+      if (this.keys.has('Space')) this.game.input('chargeRelease');
+      this.keys.clear();
+    });
+  }
+
+  press(code) {
+    if (code === 'Space' && !this.keys.has('Space')) this.game.input('chargeStart');
+    this.keys.add(code);
+  }
+
+  release(code) {
+    this.keys.delete(code);
+    if (code === 'Space') this.game.input('chargeRelease');
   }
 
   update(dt) {

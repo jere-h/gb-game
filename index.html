@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>ThunderBound — Artillery Duel</title>
 <style>
   /* Chunky rounded display font for the HUD (local asset, no external hosts). */
@@ -20,12 +20,15 @@
     --gb-red: #ff5b4d;
     --gb-blue: #59c1ff;
   }
-  * { margin: 0; padding: 0; box-sizing: border-box; user-select: none; }
+  * { margin: 0; padding: 0; box-sizing: border-box; user-select: none; -webkit-user-select: none; }
   html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
   body {
     font-family: 'Trebuchet MS', 'Segoe UI', Verdana, sans-serif;
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
+    touch-action: none;                      /* no browser pan/zoom gestures */
+    -webkit-tap-highlight-color: transparent;
+    overscroll-behavior: none;
   }
   #app { position: fixed; inset: 0; }
   canvas#gl { display: block; width: 100%; height: 100%; }

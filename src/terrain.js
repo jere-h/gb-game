@@ -106,21 +106,28 @@ function drawPebble(ctx, x, y, r, rng) {
   ctx.fillRect(x - r * 0.5, y - r * 0.55, Math.max(1, r), 1);
 }
 
-// Filled, tapered, gently curving root polygon with a lit left edge.
-// Recurses once for short side branches.
+// Filled, tapered, S-curving root polygon: cubic centerline with alternating
+// lateral bows, width shrinking from baseW at the anchor to a soft point at
+// the tip, a dark shade line on the right for volume and a lit left edge.
+// Recurses for 1-2 curved side branches.
 function drawRoot(ctx, x0, y0, len, drift, baseW, rng, depth = 0) {
-  const N = 12;
-  const c1x = x0 + drift * 0.3 + (rng() - 0.5) * 8;
-  const c1y = y0 + len * 0.55;
-  const x2 = x0 + drift;
-  const y2 = y0 + len;
+  const N = 14;
+  // Alternating bows give the strand a hand-drawn S wiggle instead of the old
+  // near-straight quadratic stick.
+  const bow = (rng() < 0.5 ? -1 : 1) * (0.18 + rng() * 0.3) * len;
+  const c1x = x0 + drift * 0.2 + bow;
+  const c1y = y0 + len * 0.32;
+  const c2x = x0 + drift * 0.72 - bow * (0.5 + rng() * 0.4);
+  const c2y = y0 + len * 0.7;
+  const x3 = x0 + drift;
+  const y3 = y0 + len;
   const xs = [], ys = [], hw = [];
   for (let i = 0; i <= N; i++) {
     const t = i / N;
     const it = 1 - t;
-    xs.push(it * it * x0 + 2 * it * t * c1x + t * t * x2);
-    ys.push(it * it * y0 + 2 * it * t * c1y + t * t * y2);
-    hw.push(0.5 + (baseW / 2 - 0.5) * Math.pow(it, 1.35));
+    xs.push(it * it * it * x0 + 3 * it * it * t * c1x + 3 * it * t * t * c2x + t * t * t * x3);
+    ys.push(it * it * it * y0 + 3 * it * it * t * c1y + 3 * it * t * t * c2y + t * t * t * y3);
+    hw.push(0.5 + (baseW / 2 - 0.5) * Math.pow(it, 1.5));
   }
   ctx.beginPath();
   ctx.moveTo(xs[0] - hw[0], ys[0]);
@@ -129,7 +136,15 @@ function drawRoot(ctx, x0, y0, len, drift, baseW, rng, depth = 0) {
   ctx.closePath();
   ctx.fillStyle = '#5C4330';
   ctx.fill();
-  ctx.strokeStyle = 'rgba(139,106,77,0.8)';
+  // Shade line hugging the right edge (volume), highlight along the left.
+  ctx.lineCap = 'round';
+  ctx.strokeStyle = 'rgba(43,28,17,0.75)';
+  ctx.lineWidth = Math.min(2, baseW * 0.22);
+  ctx.beginPath();
+  ctx.moveTo(xs[0] + hw[0] - 0.7, ys[0] + 2);
+  for (let i = 1; i < N; i++) ctx.lineTo(xs[i] + hw[i] * 0.55, ys[i]);
+  ctx.stroke();
+  ctx.strokeStyle = 'rgba(148,113,80,0.8)';
   ctx.lineWidth = 1;
   ctx.beginPath();
   ctx.moveTo(xs[0] - hw[0] + 0.6, ys[0] + 2);
@@ -138,11 +153,11 @@ function drawRoot(ctx, x0, y0, len, drift, baseW, rng, depth = 0) {
   if (depth === 0 && baseW > 4) {
     const nb = 1 + ((rng() * 2) | 0);
     for (let b = 0; b < nb; b++) {
-      const t = 0.28 + rng() * 0.38;
+      const t = 0.26 + rng() * 0.4;
       const i = Math.round(t * N);
       const side = rng() > 0.5 ? 1 : -1;
-      drawRoot(ctx, xs[i], ys[i], len * (0.22 + rng() * 0.2),
-        side * (8 + rng() * 14), Math.max(2.5, baseW * 0.45), rng, 1);
+      drawRoot(ctx, xs[i], ys[i], len * (0.26 + rng() * 0.24),
+        side * (12 + rng() * 20), Math.max(2.5, baseW * 0.42), rng, 1);
     }
   }
 }

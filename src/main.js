@@ -35,6 +35,7 @@ if (params.auto === '1') p1.isAI = true;
 const mobiles = [p1, p2];
 const game = new Game({ scene: world.scene, terrain, mobiles, effects, ui, audio, camera: world.camera, seed });
 const input = new Input(game);
+if (ui.bindTouch) ui.bindTouch(input);
 
 // Impact juice: game asks for a camera zoom punch at the moment of impact.
 game.onImpactKick = (strength) => world.punch(strength);

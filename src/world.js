@@ -22,7 +22,9 @@ const VIEW_TOP = 1500;     // highest world y the view top may reach
 export class World {
   constructor(canvas) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-    this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    // Phones get a lower pixel-ratio cap: fill-rate is the mobile bottleneck.
+    const isTouch = matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
+    this.renderer.setPixelRatio(Math.min(devicePixelRatio, isTouch ? 1.75 : 2));
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
 
     this.scene = new THREE.Scene();

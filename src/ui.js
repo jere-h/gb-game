@@ -571,6 +571,88 @@ export class UI {
           box-shadow: inset 0 1px 0 rgba(255,255,255,0.3), 0 1px 0 rgba(0,0,0,0.8);
           color: #fff; font-size: 11px; font-weight: 800; line-height: 1;
         }
+
+        /* ============ touch controls (shown only on coarse pointers) ======= */
+        #hud .tcluster {
+          position: absolute; display: none; gap: 12px; z-index: 6;
+          bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+        }
+        #hud.touch .tcluster { display: flex; }
+        #hud .tcluster.moveC { left: calc(14px + env(safe-area-inset-left, 0px)); }
+        #hud .tcluster.aimC {
+          right: calc(14px + env(safe-area-inset-right, 0px));
+          flex-direction: column;
+        }
+        #hud .tbtn {
+          pointer-events: auto; width: 60px; height: 60px; border-radius: 16px;
+          display: flex; align-items: center; justify-content: center;
+          background: linear-gradient(180deg, rgba(70,89,156,0.85), rgba(29,39,80,0.85) 55%, rgba(19,26,56,0.88));
+          border: 2px solid rgba(232,182,74,0.9);
+          box-shadow: 0 0 0 2px rgba(107,74,18,0.85),
+            inset 0 1px 0 rgba(255,255,255,0.3),
+            inset 0 -6px 10px rgba(0,0,0,0.4), 0 5px 14px rgba(0,0,0,0.5);
+          color: #ffe7a0; font-size: 24px; font-weight: 800;
+          text-shadow: 0 2px 2px #000;
+          touch-action: none;
+        }
+        #hud .tbtn.held {
+          transform: scale(0.93);
+          background: linear-gradient(180deg, rgba(97,120,199,0.95), rgba(43,57,112,0.95) 55%, rgba(26,35,74,0.95));
+          box-shadow: 0 0 0 2px rgba(107,74,18,0.85), 0 0 14px rgba(255,215,94,0.5),
+            inset 0 1px 0 rgba(255,255,255,0.35), 0 3px 8px rgba(0,0,0,0.5);
+        }
+        #hud.touch .fireBtn { pointer-events: auto; touch-action: none; }
+        #hud.touch .fireBtn.held {
+          transform: scale(0.93);
+          box-shadow: 0 0 0 1px rgba(255,235,170,0.5), 0 0 18px rgba(255,215,94,0.8),
+            inset 0 2px 0 rgba(255,255,255,0.65), 0 2px 6px rgba(0,0,0,0.55);
+        }
+        #hud.touch .help { display: none; }
+
+        /* rotate-device overlay: portrait phones */
+        #hud .rotateOverlay {
+          position: fixed; inset: 0; display: none; z-index: 99;
+          pointer-events: auto; flex-direction: column; gap: 18px;
+          align-items: center; justify-content: center;
+          background: radial-gradient(circle at 50% 35%, #2c3a6b 0%, #161e42 55%, #0c1128 100%);
+        }
+        #hud .rotateOverlay .rotIcon {
+          font-size: 64px; animation: rotHint 1.6s ease-in-out infinite;
+        }
+        @keyframes rotHint {
+          0%, 20% { transform: rotate(0deg); }
+          55%, 100% { transform: rotate(90deg); }
+        }
+        #hud .rotateOverlay .rotText {
+          color: var(--gold); font-size: 22px; font-weight: 800; letter-spacing: 1px;
+          font-family: 'Baloo 2', 'Trebuchet MS', sans-serif;
+          text-shadow: 0 2px 0 #6b4a12, 0 4px 14px rgba(0,0,0,0.6);
+        }
+        @media (orientation: portrait) and (pointer: coarse) {
+          #hud.touch .rotateOverlay { display: flex; }
+        }
+
+        /* ============ compact HUD for small screens ============ */
+        @media (max-width: 980px) {
+          #hud .console {
+            width: calc(100vw - 190px);
+            padding: 8px 12px 9px;
+            border-radius: 14px 14px 0 0;
+          }
+          #hud .console .idBox, #hud .console .slotsBox { display: none; }
+          #hud .angle { font-size: 22px; }
+          #hud .ledScreen { min-width: 72px; }
+          #hud .powerWrap { height: 28px; }
+          #hud .fireBtn { width: 52px; height: 52px; flex: 0 0 52px; font-size: 13px; }
+          #hud .windPlate { transform: scale(0.78); transform-origin: top center; }
+          #hud .players { width: 200px; }
+          #hud .players.left { left: calc(10px + env(safe-area-inset-left, 0px)); }
+          #hud .players.right { right: calc(10px + env(safe-area-inset-right, 0px)); }
+          #hud .portraitFrame { flex: 0 0 34px; width: 34px; height: 34px; }
+          #hud .pname { font-size: 13px; }
+          #hud .banner .bInner > span { font-size: 38px; }
+          #hud .dmg > span { font-size: 36px; }
+        }
       </style>
 
       <div class="windWrap">
@@ -638,6 +720,19 @@ export class UI {
           </div>
           <div class="fireBtn"><span>FIRE</span></div>
         </div>
+      </div>
+
+      <div class="tcluster moveC">
+        <div class="tbtn tLeft">&#9664;</div>
+        <div class="tbtn tRight">&#9654;</div>
+      </div>
+      <div class="tcluster aimC">
+        <div class="tbtn tUp">&#9650;</div>
+        <div class="tbtn tDown">&#9660;</div>
+      </div>
+      <div class="rotateOverlay">
+        <div class="rotIcon">&#128241;</div>
+        <div class="rotText">Rotate your device to play</div>
       </div>`;
 
     this.el = {
@@ -663,7 +758,16 @@ export class UI {
       help: root.querySelector('.help'),
       idPortrait: root.querySelector('.idPortrait'),
       idName: root.querySelector('.idName'),
+      fireBtn: root.querySelector('.fireBtn'),
+      tLeft: root.querySelector('.tLeft'),
+      tRight: root.querySelector('.tRight'),
+      tUp: root.querySelector('.tUp'),
+      tDown: root.querySelector('.tDown'),
     };
+
+    // Touch devices get on-screen controls (wired in bindTouch).
+    this.isTouch = matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
+    if (this.isTouch) root.classList.add('touch');
 
     // 8 radial rim ticks on the wind dial.
     {
@@ -701,6 +805,34 @@ export class UI {
     this._helpGone = false;  // one-shot: hint fades permanently after 1st fire
     this._idSet = false;     // console identity portrait painted once
     this._bRaf = 0;          // banner dismiss rAF handle
+  }
+
+  // Wire the on-screen touch buttons to the Input instance (press/release with
+  // the same key codes as the keyboard, so held buttons repeat smoothly).
+  // Safe to call on any device; buttons stay hidden without the touch class.
+  bindTouch(input) {
+    const hold = (el, code) => {
+      if (!el) return;
+      el.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        el.setPointerCapture(e.pointerId);
+        el.classList.add('held');
+        input.press(code);
+      });
+      const end = (e) => {
+        if (!el.classList.contains('held')) return;
+        el.classList.remove('held');
+        input.release(code);
+      };
+      el.addEventListener('pointerup', end);
+      el.addEventListener('pointercancel', end);
+      el.addEventListener('contextmenu', (e) => e.preventDefault());
+    };
+    hold(this.el.tLeft, 'ArrowLeft');
+    hold(this.el.tRight, 'ArrowRight');
+    hold(this.el.tUp, 'ArrowUp');
+    hold(this.el.tDown, 'ArrowDown');
+    hold(this.el.fireBtn, 'Space'); // hold to charge, release to fire
   }
 
   setWind(wind) {
