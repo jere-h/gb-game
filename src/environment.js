@@ -98,46 +98,57 @@ function desat(c, t) {
 // --- biomes ------------------------------------------------------------------
 // Four painted palettes. Structure is shared; only colour, foliage vocabulary
 // and snow differ, so every map is the same quality bar in a different key.
+//
+// Sky ramps deliberately travel through THREE temperatures (deep periwinkle
+// zenith -> cyan mid -> warm cream/peach at the horizon) instead of one linear
+// blue lerp, and every biome owns two SATURATED accents — `fall` (an autumn
+// grove planted in one mid band) and `cascade` (a waterfall ribbon) — plus
+// `lit` for warm window light in the hamlet. Those are the only chroma events
+// the backdrop gets, and they are what stop it reading as one flat wash.
 const BIOMES = [
   {
     name: 'alpine',
-    sky: { top: '#1b52bd', mid: '#4f92e6', horizon: '#dcf0fb', below: '#7cc0df', warm: '#ffd9a2' },
-    rock: { top: '#7099d4', bot: '#22437c' },
-    hazeCool: '#cee4f6', hazeWarm: '#ffe2ba',
+    sky: { top: '#0f3396', mid: '#4ba2e4', horizon: '#ffeed6', below: '#7cc0df', warm: '#ffd08e' },
+    rock: { top: '#7ba4dc', bot: '#132a5c' },
+    hazeCool: '#d3e6f7', hazeWarm: '#ffe0b2',
     crest: '#fff9e8', crestA: 1.0,
-    snow: true, trees: 'conifer', tree: '#254a72',
-    cloud: '#e9f2fd', glow: '#ffe7c4',
-    sea: { shallow: '#8fe6f4', mid: '#28a2d4', deep: '#0a3763', foam: '#ffffff' },
+    snow: true, trees: 'conifer', tree: '#1d4068',
+    fall: '#e08b32', cascade: '#5fe6dd', lit: '#ffd07a', fallChance: 0.55,
+    cloud: '#e9f2fd', glow: '#ffe0b0', cirrus: '#eef6ff',
+    sea: { shallow: '#8fe6f4', mid: '#28a2d4', deep: '#08315c', foam: '#ffffff' },
   },
   {
     name: 'sunset',
-    sky: { top: '#39286f', mid: '#9a5ba4', horizon: '#ffc188', below: '#dd8a67', warm: '#ffcb92' },
-    rock: { top: '#b98cbb', bot: '#3e2b5f' },
-    hazeCool: '#f4c8b4', hazeWarm: '#ffd7a4',
+    sky: { top: '#2b1a63', mid: '#9c56a6', horizon: '#ffb877', below: '#dd8a67', warm: '#ffb474' },
+    rock: { top: '#c895bf', bot: '#2f1f50' },
+    hazeCool: '#f0bfae', hazeWarm: '#ffcf94',
     crest: '#ffe3bd', crestA: 1.25,
-    snow: false, trees: 'conifer', tree: '#37235a',
-    cloud: '#ffdcc4', glow: '#ffb384',
-    sea: { shallow: '#ffc79f', mid: '#c07bab', deep: '#221d55', foam: '#fff2e2' },
+    snow: false, trees: 'conifer', tree: '#2d1c4c',
+    fall: '#ff7d3a', cascade: '#66d9e0', lit: '#ffe08c', fallChance: 0.7,
+    cloud: '#ffdcc4', glow: '#ff9f6a', cirrus: '#ffd0b4',
+    sea: { shallow: '#ffc79f', mid: '#c07bab', deep: '#1c1747', foam: '#fff2e2' },
   },
   {
     name: 'verdant',
-    sky: { top: '#1476bd', mid: '#54b6d9', horizon: '#eaf7d6', below: '#8ed9bf', warm: '#ffeeae' },
-    rock: { top: '#7fb994', bot: '#1f5346' },
-    hazeCool: '#dcf0da', hazeWarm: '#fff0b6',
+    sky: { top: '#0a5cb4', mid: '#4ec4d8', horizon: '#fff2c4', below: '#8ed9bf', warm: '#ffe49a' },
+    rock: { top: '#8cc59d', bot: '#123f36' },
+    hazeCool: '#dcf0da', hazeWarm: '#ffeeae',
     crest: '#f4ffdc', crestA: 1.0,
-    snow: false, trees: 'broadleaf', tree: '#17452f',
-    cloud: '#eefaea', glow: '#ffedb2',
-    sea: { shallow: '#9df0e0', mid: '#20a58f', deep: '#07403f', foam: '#f6fffb' },
+    snow: false, trees: 'broadleaf', tree: '#123c29',
+    fall: '#e8a021', cascade: '#43e3c8', lit: '#ffd67e', fallChance: 0.45,
+    cloud: '#eefaea', glow: '#ffe39a', cirrus: '#e8fbf0',
+    sea: { shallow: '#9df0e0', mid: '#20a58f', deep: '#05383a', foam: '#f6fffb' },
   },
   {
     name: 'dawn',
-    sky: { top: '#2a4bab', mid: '#7ea6e2', horizon: '#ffd3dd', below: '#b7cfe9', warm: '#ffc2b8' },
-    rock: { top: '#7382c6', bot: '#232c66' },
-    hazeCool: '#cbd2ea', hazeWarm: '#ffcbc6',
-    crest: '#ffd9dd', crestA: 1.15,
-    snow: true, trees: 'mixed', tree: '#2b3663',
-    cloud: '#f6e6f2', glow: '#ffc4bd',
-    sea: { shallow: '#a8e2f2', mid: '#3f8fcb', deep: '#123a72', foam: '#ffffff' },
+    sky: { top: '#1e39a4', mid: '#68b0e8', horizon: '#ffd6bd', below: '#b7cfe9', warm: '#ffb491' },
+    rock: { top: '#8f8fd4', bot: '#1b2058' },
+    hazeCool: '#d7dcf0', hazeWarm: '#ffcbb4',
+    crest: '#ffe2d8', crestA: 1.15,
+    snow: true, trees: 'mixed', tree: '#26305e',
+    fall: '#e07a3c', cascade: '#5ad9e2', lit: '#ffcb7a', fallChance: 0.6,
+    cloud: '#f7e9f4', glow: '#ffb99e', cirrus: '#f6e4ef',
+    sea: { shallow: '#a8e2f2', mid: '#3f8fcb', deep: '#0d2f63', foam: '#ffffff' },
   },
 ];
 
@@ -199,20 +210,25 @@ export class Environment {
         varying vec3 vW;
         void main() {
           float y = vW.y;
-          vec3 col = mix(cHorizon, cMid, smoothstep(80.0, 750.0, y));
-          col = mix(col, cTop, smoothstep(750.0, 2100.0, y));
+          // THREE temperatures, not one lerp: warm cream at the horizon, a
+          // cyan waist, a deep periwinkle zenith. The waist is deliberately
+          // narrow so the hue actually turns rather than cross-fading.
+          vec3 col = mix(cHorizon, cMid, smoothstep(20.0, 560.0, y));
+          col = mix(col, cTop, smoothstep(560.0, 1900.0, y));
           col = mix(col, cBelow, smoothstep(0.0, 700.0, -y));
           // Warm band hugging the horizon: a broad wedge (roughly the lower
           // third of the sky) so the sky is never one hue top to bottom.
-          float sunSide = 0.55 + 0.45 * exp(-abs(vW.x - uSun.x) / 1500.0);
-          col = mix(col, cWarm, smoothstep(880.0, 60.0, y) * 0.38 * sunSide);
-          col += cWarm * exp(-abs(y - 140.0) * 0.0034) * 0.30 * sunSide;
-          // Tight halo around the sun itself. Deliberately small: a wide soft
-          // wash reads as a lens smudge and eats silhouette contrast.
-          // uSunVis fades it out when the sun is hidden behind terrain, so
+          float sunSide = 0.52 + 0.48 * exp(-abs(vW.x - uSun.x) / 1500.0);
+          col = mix(col, cWarm, smoothstep(820.0, 30.0, y) * 0.34 * sunSide);
+          col += cWarm * exp(-abs(y - 130.0) * 0.0032) * 0.26 * sunSide;
+          // TWO glow radii around the sun: a broad low-alpha bloom (the
+          // "there is a warm light source over there" cue) and a tight halo.
+          // uSunVis fades both out when the sun is hidden behind terrain, so
           // no orphaned glow sliver ever peeks around an island edge.
-          float d = length(vW.xy - uSun);
-          col += cWarm * exp(-d / 190.0) * 0.20 * uSunVis;
+          vec2 dv = vW.xy - uSun;
+          float d = length(dv * vec2(1.0, 1.18));
+          col += cWarm * exp(-d / 760.0) * 0.155 * uSunVis;
+          col += cWarm * exp(-d / 185.0) * 0.20 * uSunVis;
           gl_FragColor = vec4(col, 1.0);
         }`,
       depthWrite: false,
@@ -234,37 +250,54 @@ export class Environment {
     const ctx = c.getContext('2d');
     const rng = makeRng(9187);
 
-    // God rays first (behind halo + disc): uneven angles, lengths and widths.
+    // God rays first (behind halo + disc). FOUR of them, at irregular angles
+    // with unequal lengths and widths, each blurred: a symmetric evenly-spaced
+    // starburst is the single most obvious "primitive" tell in a painted sky.
     ctx.save();
     ctx.translate(R, R);
-    const nRays = 6 + ((rng() * 3) | 0);
-    let a = rng() * Math.PI * 2;
-    for (let i = 0; i < nRays; i++) {
-      a += (Math.PI * 2) / nRays * (0.7 + rng() * 0.6);
-      const len = R * (0.48 + rng() * 0.44);
-      const hw = 0.045 + rng() * 0.075;      // half-width, radians
+    ctx.filter = 'blur(7px)';
+    const nRays = 3 + ((rng() * 2) | 0);
+    const angles = [];
+    for (let i = 0; i < nRays; i++) angles.push(rng() * Math.PI * 2);
+    angles.sort((p, q) => p - q);
+    // Reject any pair closer than ~35 degrees so they never read as a fan.
+    for (let i = 1; i < angles.length; i++) {
+      if (angles[i] - angles[i - 1] < 0.62) angles[i] = angles[i - 1] + 0.62 + rng() * 0.5;
+    }
+    for (let i = 0; i < angles.length; i++) {
+      const a = angles[i];
+      const len = R * (0.34 + rng() * 0.58);   // wildly unequal
+      const hw = 0.05 + rng() * 0.10;          // half-width, radians
       const g = ctx.createLinearGradient(0, 0, Math.cos(a) * len, Math.sin(a) * len);
-      g.addColorStop(0.0, 'rgba(255,238,190,0.30)');
-      g.addColorStop(0.35, 'rgba(255,228,166,0.15)');
-      g.addColorStop(0.75, 'rgba(255,218,150,0.05)');
+      g.addColorStop(0.0, 'rgba(255,238,190,0.26)');
+      g.addColorStop(0.35, 'rgba(255,228,166,0.12)');
+      g.addColorStop(0.75, 'rgba(255,218,150,0.035)');
       g.addColorStop(1.0, 'rgba(255,214,146,0)');
       ctx.fillStyle = g;
       ctx.beginPath();
       ctx.moveTo(0, 0);
-      ctx.lineTo(Math.cos(a - hw) * len * 0.9, Math.sin(a - hw) * len * 0.9);
+      ctx.lineTo(Math.cos(a - hw) * len * 0.55, Math.sin(a - hw) * len * 0.55);
       ctx.lineTo(Math.cos(a) * len, Math.sin(a) * len);
-      ctx.lineTo(Math.cos(a + hw) * len * 0.9, Math.sin(a + hw) * len * 0.9);
+      ctx.lineTo(Math.cos(a + hw * 0.7) * len * 0.55, Math.sin(a + hw * 0.7) * len * 0.55);
       ctx.closePath();
       ctx.fill();
     }
+    ctx.filter = 'none';
     ctx.restore();
 
-    // Halo: terminal radius 168px of 256 — about a third tighter than a
-    // full-plane wash, so it never blankets the neighbouring art.
-    let g = ctx.createRadialGradient(R, R, 0, R, R, 168);
-    g.addColorStop(0.00, 'rgba(255,236,178,0.55)');
-    g.addColorStop(0.30, 'rgba(255,220,140,0.22)');
-    g.addColorStop(0.62, 'rgba(255,210,124,0.07)');
+    // TWO glow radii. A broad, very low alpha bloom out to the sprite edge
+    // (atmosphere scattering) under a tight hot halo (the light itself). One
+    // radius alone reads either as a sticker or as a lens smudge.
+    let g = ctx.createRadialGradient(R, R, 0, R, R, 246);
+    g.addColorStop(0.00, 'rgba(255,232,180,0.20)');
+    g.addColorStop(0.45, 'rgba(255,224,160,0.085)');
+    g.addColorStop(1.00, 'rgba(255,214,140,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, S, S);
+    g = ctx.createRadialGradient(R, R, 0, R, R, 150);
+    g.addColorStop(0.00, 'rgba(255,238,186,0.52)');
+    g.addColorStop(0.28, 'rgba(255,220,140,0.20)');
+    g.addColorStop(0.62, 'rgba(255,210,124,0.06)');
     g.addColorStop(1.00, 'rgba(255,206,118,0)');
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, S, S);
@@ -295,6 +328,36 @@ export class Environment {
     this._sunVis = 1; // smoothed 0..1 visibility (occlusion fade)
     this._sunScale = 1;
     this.group.add(this.sun);
+
+    // --- light bleed over occluders ------------------------------------------
+    // An additive warm bloom drawn IN FRONT of the terrain at the same screen
+    // spot as the disc. It fades UP only when something covers the sun, so an
+    // island edge crossing the disc gets a warm rim and a soft bleed spilling
+    // past its contour instead of chopping the glow off with a hard cut.
+    const BS = 256, BR = BS / 2;
+    const bc = document.createElement('canvas');
+    bc.width = bc.height = BS;
+    const bx = bc.getContext('2d');
+    let bg = bx.createRadialGradient(BR, BR, 0, BR, BR, BR);
+    bg.addColorStop(0.00, 'rgba(255,236,182,0.95)');
+    bg.addColorStop(0.16, 'rgba(255,226,158,0.46)');
+    bg.addColorStop(0.38, 'rgba(255,214,136,0.14)');
+    bg.addColorStop(0.70, 'rgba(255,206,120,0.03)');
+    bg.addColorStop(1.00, 'rgba(255,200,110,0)');
+    bx.fillStyle = bg;
+    bx.fillRect(0, 0, BS, BS);
+    const btex = new THREE.CanvasTexture(bc);
+    btex.colorSpace = THREE.SRGBColorSpace;
+    this.sunBleed = new THREE.Mesh(
+      new THREE.PlaneGeometry(300, 300),
+      new THREE.MeshBasicMaterial({
+        map: btex, transparent: true, depthWrite: false, depthTest: false,
+        blending: THREE.AdditiveBlending, opacity: 0,
+      })
+    );
+    this.sunBleed.renderOrder = 8.5;   // over terrain (5) and sea (8)
+    this.sunBleed.visible = false;
+    this.group.add(this.sunBleed);
   }
 
   // Occlusion-fade the sun behind terrain (the floating islands): sample the
@@ -347,6 +410,19 @@ export class Environment {
     // Constant apparent size: view height at the sun's depth is 2*tanH*dist.
     this._sunScale = (SUN_SCREEN_H * 2 * tanH * dist) / 300;
     this.sunWorld.copy(this.sun.position);
+    if (this.sunBleed) {
+      // Same screen spot, but in FRONT of the terrain so it can spill over an
+      // occluder's edge. Slightly larger than the disc.
+      const zb = 60;
+      const db = cam.position.z - zb;
+      this.sunBleed.position.set(
+        cam.position.x + nx * tanH * aspect * db,
+        cam.position.y + ny * tanH * db,
+        zb
+      );
+      const sb = (SUN_SCREEN_H * 1.05 * 2 * tanH * db) / 300;
+      this.sunBleed.scale.set(sb, sb, 1);
+    }
     if (this.skyMat) {
       // Aim the sky-shader halo at the same screen spot, projected onto the
       // sky plane (z=-1500) so glow and disc stay concentric.
@@ -377,22 +453,42 @@ export class Environment {
     // flat slab. Bases sit ABOVE the terrain's surface band (~y 280..420) so
     // the near, dark, saturated ridges are actually visible instead of being
     // buried behind the ground with only the palest layers on show.
+    // `haze` steps are large and the ramp is front-loaded so the six bands
+    // occupy six clearly different values: the far pair are near-dissolved,
+    // the near pair keep most of their local colour. That value ladder IS the
+    // depth structure — nothing here is separated by an outline.
     const layers = [
       { z: -1020, ro: -8.7, base: 590, amp: 205, rough: 0.48, width: 4400,
-        cw: 1280, ch: 540, haze: 0.86, shade: 0.04, snow: true, forest: false, landmark: null },
+        cw: 1280, ch: 540, haze: 0.95, shade: 0.03, snow: true, forest: false },
       { z: -880, ro: -8.5, base: 512, amp: 240, rough: 0.50, width: 4300,
-        cw: 1536, ch: 630, haze: 0.70, shade: 0.09, snow: true, forest: false, landmark: null },
+        cw: 1536, ch: 630, haze: 0.82, shade: 0.07, snow: true, forest: false },
       { z: -740, ro: -8.2, base: 440, amp: 262, rough: 0.54, width: 4150,
-        cw: 1792, ch: 736, haze: 0.53, shade: 0.16, snow: true, forest: true, landmark: null },
+        cw: 1792, ch: 736, haze: 0.62, shade: 0.14, snow: true, forest: true },
       { z: -600, ro: -7.7, base: 350, amp: 268, rough: 0.58, width: 4050,
-        cw: 2048, ch: 860, haze: 0.34, shade: 0.24, snow: false, forest: true, landmark: 'windmill' },
+        cw: 2048, ch: 860, haze: 0.40, shade: 0.24, snow: false, forest: true },
       { z: -460, ro: -7.0, base: 268, amp: 262, rough: 0.63, width: 3950,
-        cw: 2048, ch: 920, haze: 0.17, shade: 0.32, snow: false, forest: true, landmark: 'tower' },
+        cw: 2048, ch: 920, haze: 0.20, shade: 0.34, snow: false, forest: true },
       // Near dark band: overlaps the playfield edges so the backdrop is not a
       // flat wash behind the mobiles.
       { z: -330, ro: -6.4, base: 205, amp: 240, rough: 0.68, width: 3850,
-        cw: 2048, ch: 960, haze: 0.03, shade: 0.40, snow: false, forest: true, landmark: 'huts' },
+        cw: 2048, ch: 960, haze: 0.02, shade: 0.44, snow: false, forest: true },
     ];
+
+    // One landmark per band at most, and never the same silhouette twice on a
+    // map: shuffle the prop deck and deal from it. Bands 2..5 get props (the
+    // two farthest are too dissolved to carry detail).
+    const deck = ['windmill', 'tower', 'huts', 'bridge', 'cascade', 'lighthouse', 'arch'];
+    for (let i = deck.length - 1; i > 0; i--) {
+      const j = (rng() * (i + 1)) | 0;
+      const t = deck[i]; deck[i] = deck[j]; deck[j] = t;
+    }
+    layers[0].landmark = null;
+    layers[1].landmark = null;
+    for (let i = 2; i < layers.length; i++) layers[i].landmark = deck[i - 2];
+    // Exactly one mid band carries the autumn grove — the backdrop's single
+    // saturated foliage accent.
+    const fallBand = 2 + ((rng() * 3) | 0);
+    for (let i = 0; i < layers.length; i++) layers[i].fall = (i === fallBand);
 
     const worldBottom = -700; // deep enough that no gap to the sea ever shows
 
@@ -445,13 +541,13 @@ export class Environment {
       // The lerp uses haze^0.85 so the near layers keep almost all of their
       // local colour while the far ones still dissolve; combined with the big
       // haze steps this is what separates the layers WITHOUT any outline.
-      const hz2 = Math.pow(L.haze, 0.85);
+      const hz2 = Math.pow(L.haze, 0.78);
       // Far layers dissolve into a WARMER tint than near ones: real aerial
       // perspective shifts hue as well as value, and it is what keeps the
       // backdrop from being one blue note from horizon to zenith.
-      const hazeTint = mixRgb(HAZE_COOL, HAZE_WARM, 0.12 + 0.40 * L.haze);
-      const top = mixRgb(desat(ROCK_TOP, L.haze * 0.5), hazeTint, hz2 * 0.86);
-      const bot = mixRgb(desat(ROCK_BOT, L.haze * 0.45), hazeTint, hz2 * 0.76);
+      const hazeTint = mixRgb(HAZE_COOL, HAZE_WARM, 0.10 + 0.46 * L.haze);
+      const top = mixRgb(desat(ROCK_TOP, L.haze * 0.80), hazeTint, hz2 * 0.93);
+      const bot = mixRgb(desat(ROCK_BOT, L.haze * 0.72), hazeTint, hz2 * 0.88);
 
       const traceRidge = (yOf, step = 1) => {
         ctx.beginPath();
@@ -480,41 +576,32 @@ export class Environment {
       ctx.fill();
       ctx.restore();
 
-      // Interior spurs: two more fractal ridges painted INSIDE the silhouette,
-      // each darker than the one behind it. This is what stops a near layer
-      // reading as one dead slab of colour — the body now has folded
-      // landform inside it, not just an outline.
-      const spurLight = mixRgb(top, hex2rgb(B.crest), 0.55);
-      for (let k = 0; k < 2; k++) {
-        const sp = fractalRidge(rng, 40 + k * 40, 0.58);
-        const sp2 = fractalRidge(rng, 96, 0.7);
-        const drop = 0.30 + k * 0.30;
+      // Interior landform: ONE more fractal ridge painted inside the
+      // silhouette as a solid darker mass (a nearer spur crossing in front of
+      // the main range). Deliberately a single closed shape with a terminating
+      // silhouette — the previous build stacked long soft "contour" strokes
+      // across the whole width, which read as Perlin scratches on the rock.
+      {
+        const sp = fractalRidge(rng, 34, 0.56);
+        const sp2 = fractalRidge(rng, 80, 0.70);
         const yOf = (x) => {
           const f = x / CW;
-          return toCy(ridgeY[x] - L.amp * (drop + 0.20 * sampleRidge(sp, f)
+          return toCy(ridgeY[x] - L.amp * (0.34 + 0.24 * sampleRidge(sp, f)
             + 0.07 * sampleRidge(sp2, f)) - 12);
         };
         ctx.save();
         ctx.globalCompositeOperation = 'source-atop';
-        ctx.fillStyle = `rgba(20,38,74,${(0.09 + k * 0.05) * (1 - L.haze * 0.55)})`;
+        ctx.fillStyle = `rgba(20,38,74,${(0.13 * (1 - L.haze * 0.6)).toFixed(4)})`;
         traceRidge(yOf, 2);
         ctx.fill();
-        // Light catching the top of the fold. Soft, wide, low alpha — a value
-        // hint, never a contour line.
-        ctx.lineCap = 'round';
-        ctx.lineJoin = 'round';
-        for (let i = 0; i < 5; i++) {
-          ctx.lineWidth = 13 - i * 2.4;
-          ctx.strokeStyle = rgb2css(spurLight, (0.035 * (1 - L.haze * 0.6)).toFixed(4));
-          ctx.beginPath();
-          for (let x = 0; x <= CW; x += 6) {
-            const y = yOf(x);
-            if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-          }
-          ctx.stroke();
-        }
         ctx.restore();
       }
+
+      // Real form on the major peaks: a lit facet and a shadow facet per
+      // crest, split along the descending ridge, each a closed painted shape
+      // that TERMINATES at the shoulder instead of running off the canvas.
+      const crests = this.pickCrests(ridgeY, L, CW);
+      this.paintFacets(ctx, ridgeY, toCy, L, rng, CW, crests, top);
 
       // Broad, very soft value pockets across the body — alternating shadowed
       // basins and lit shoulders. Low frequency on purpose.
@@ -540,37 +627,38 @@ export class Environment {
       }
       ctx.restore();
 
-      // Gully/scree streaks falling from the crests: soft tapered wedges, a
-      // touch darker than the body. Cheap, and it gives the big empty mid-tone
-      // areas some direction.
+      // Gully/scree streaks falling from the crests. Drawn through a blur so
+      // they have NO ruled boundary: a hard-edged translucent quadrilateral
+      // over a translucent layer is exactly the alpha-blend artifact that made
+      // the old backdrop look like overlapping acetate.
       if (L.haze < 0.62) {
         ctx.save();
         ctx.globalCompositeOperation = 'source-atop';
-        const gn = 10 + ((rng() * 8) | 0);
+        ctx.filter = `blur(${Math.max(3, Math.round(CW / 190))}px)`;
+        ctx.lineCap = 'round';
+        const gn = 8 + ((rng() * 6) | 0);
         for (let i = 0; i < gn; i++) {
           const gx = rng() * CW;
-          const gTop = toCy(ridgeY[Math.round(gx)]) + 6;
-          const len = (0.10 + rng() * 0.22) * CH;
-          const wTop = (0.004 + rng() * 0.006) * CW;
+          const gTop = toCy(ridgeY[Math.round(gx)]) + 8;
+          const len = (0.10 + rng() * 0.20) * CH;
           const drift = (rng() - 0.5) * len * 0.5;
+          const a = 0.085 * (1 - L.haze);
           const g4 = ctx.createLinearGradient(gx, gTop, gx + drift, gTop + len);
-          const a = 0.10 * (1 - L.haze);
           g4.addColorStop(0, `rgba(18,36,72,${a.toFixed(4)})`);
+          g4.addColorStop(0.65, `rgba(18,36,72,${(a * 0.4).toFixed(4)})`);
           g4.addColorStop(1, 'rgba(18,36,72,0)');
-          ctx.fillStyle = g4;
+          ctx.strokeStyle = g4;
+          ctx.lineWidth = (0.006 + rng() * 0.010) * CW;
           ctx.beginPath();
-          ctx.moveTo(gx - wTop, gTop);
-          ctx.lineTo(gx + wTop, gTop);
-          ctx.lineTo(gx + drift + wTop * 3.4, gTop + len);
-          ctx.lineTo(gx + drift - wTop * 3.4, gTop + len);
-          ctx.closePath();
-          ctx.fill();
+          ctx.moveTo(gx, gTop);
+          ctx.quadraticCurveTo(gx + drift * 0.4, gTop + len * 0.55, gx + drift, gTop + len);
+          ctx.stroke();
         }
+        ctx.filter = 'none';
         ctx.restore();
       }
 
-      if (L.snow && B.snow) this.paintSnowCaps(ctx, ridgeY, toCy, L, rng, CW);
-      const crests = this.pickCrests(ridgeY, L, CW);
+      if (L.snow && B.snow) this.paintSnowCaps(ctx, ridgeY, toCy, L, rng, CW, crests);
       if (L.forest) this.paintForest(ctx, ridgeY, toCy, L, rng, CW);
       if (L.landmark && crests.length) {
         this.paintLandmark(ctx, ridgeY, toCy, L, rng, CW, crests);
@@ -646,28 +734,109 @@ export class Environment {
     return picked;
   }
 
-  paintSnowCaps(ctx, ridgeY, toCy, L, rng, CW) {
-    // Snow only on the tallest peaks, with a wavy lower boundary and a
-    // capped depth so it never merges into a full-width band. Tinted with the
-    // layer's haze so distant snow does not punch out of the aerial ramp.
-    const snowLine = L.base + L.amp * 0.84;
-    const wob = fractalRidge(rng, 64, 0.66);
-    const col = mixRgb(hex2rgb('#f4faff'), hex2rgb(this.biome.hazeCool), L.haze * 0.75);
-    ctx.fillStyle = rgb2css(col, (0.82 - L.haze * 0.35).toFixed(3));
-    for (let x = 0; x <= CW; x++) {
-      const line = snowLine + (sampleRidge(wob, (x / CW) * 3 % 1) - 0.5) * 46;
-      if (ridgeY[x] > line) {
-        const top = toCy(ridgeY[x]);
-        const bot = Math.min(toCy(line), toCy(ridgeY[x] - 88));
-        if (bot > top) ctx.fillRect(x, top, 1, bot - top);
+  // Lit facet + shadow facet per major peak, split along the ridge that
+  // descends from the crest. Each is a CLOSED shape whose lower edge curves
+  // back up to the shoulder, so it terminates in a silhouette instead of
+  // fading out mid-face like a noise scratch.
+  paintFacets(ctx, ridgeY, toCy, L, rng, CW, crests, topCol) {
+    if (!crests.length) return;
+    const strength = 1 - L.haze * 0.72;
+    if (strength < 0.12) return;
+    const litCol = mixRgb(topCol, hex2rgb(this.biome.crest), 0.62);
+    ctx.save();
+    ctx.globalCompositeOperation = 'source-atop';
+    ctx.filter = `blur(${Math.max(2, Math.round(CW / 340))}px)`;
+    for (const cx of crests) {
+      const h0 = ridgeY[cx];
+      // Walk out to the shoulders: where the ridge has dropped a good chunk of
+      // the peak's prominence, or a hard span cap so one facet can never span
+      // the canvas.
+      const cap = Math.round(CW / 7);
+      const dropTo = h0 - L.amp * (0.22 + rng() * 0.12);
+      let xl = cx, xr = cx;
+      while (xl > 0 && cx - xl < cap && ridgeY[xl] > dropTo) xl--;
+      while (xr < CW && xr - cx < cap && ridgeY[xr] > dropTo) xr++;
+      if (xr - xl < 24) continue;
+      const spineDrop = L.amp * (0.30 + rng() * 0.22);
+
+      // Sun is upper-LEFT, so the -x flank is lit and the +x flank is shadow.
+      for (const side of [-1, 1]) {
+        const xa = side < 0 ? xl : cx;
+        const xb = side < 0 ? cx : xr;
+        if (xb - xa < 10) continue;
+        const foot = side < 0 ? xl : xr;
+        ctx.beginPath();
+        ctx.moveTo(foot, toCy(ridgeY[foot]));
+        const step = Math.max(2, ((xb - xa) / 40) | 0);
+        for (let x = xa; x <= xb; x += step) ctx.lineTo(x, toCy(ridgeY[x]));
+        ctx.lineTo(cx, toCy(ridgeY[cx]));
+        // Lower boundary: a curve from the crest back to EXACTLY the start
+        // point, so the shape tapers to a point at both ends. Landing it
+        // anywhere else leaves closePath() to draw a vertical chord, and a
+        // ruled vertical edge inside a translucent layer is precisely the
+        // "darker quadrilateral" artifact this pass exists to remove.
+        ctx.quadraticCurveTo(
+          cx + (foot - cx) * 0.35, toCy(h0 - spineDrop * 0.62),
+          foot, toCy(ridgeY[foot])
+        );
+        ctx.closePath();
+        const a = (side < 0 ? 0.10 : 0.13) * strength;
+        ctx.fillStyle = side < 0
+          ? rgb2css(litCol, a.toFixed(4))
+          : `rgba(19,36,74,${a.toFixed(4)})`;
+        ctx.fill();
       }
     }
+    ctx.filter = 'none';
+    ctx.restore();
+  }
+
+  paintSnowCaps(ctx, ridgeY, toCy, L, rng, CW, crests) {
+    // Snow on the TWO tallest peaks of the band only, as painted caps with a
+    // wavy lower boundary — never a full-width altitude band, which reads as a
+    // contour line drawn across the range.
+    const peaks = (crests || []).slice()
+      .sort((a, b) => ridgeY[b] - ridgeY[a])
+      .slice(0, 2)
+      .filter((x) => ridgeY[x] > L.base + L.amp * 0.62);
+    if (!peaks.length) return;
+    const wob = fractalRidge(rng, 48, 0.62);
+    const col = mixRgb(hex2rgb('#f4faff'), hex2rgb(this.biome.hazeCool), L.haze * 0.75);
+    ctx.save();
+    ctx.globalCompositeOperation = 'source-atop';
+    const baseA = 0.86 - L.haze * 0.38;
+    for (const px of peaks) {
+      const h0 = ridgeY[px];
+      const depth = L.amp * (0.13 + rng() * 0.08);
+      const halfSpan = Math.round(CW / (12 + rng() * 8));
+      const x0 = Math.max(0, px - halfSpan), x1 = Math.min(CW, px + halfSpan);
+      for (let x = x0; x <= x1; x++) {
+        const t = (x - px) / halfSpan;              // -1..1
+        // Cap boundary: deepest at the peak, lifting to nothing at the edges,
+        // with a low-frequency wobble so the snow line is never a smooth arc.
+        const wobble = (sampleRidge(wob, (x / CW) * 5 % 1) - 0.5) * depth * 1.1;
+        const line = h0 - depth * (1 - t * t) + wobble;
+        if (ridgeY[x] > line) {
+          const top = toCy(ridgeY[x]);
+          const bot = toCy(line);
+          // Fade the cap out toward its flanks. Switching the column on and
+          // off at full alpha leaves a ruled vertical edge on the slope.
+          const a = baseA * Math.min(1, (1 - t * t) * 2.4);
+          if (bot > top && a > 0.01) {
+            ctx.fillStyle = rgb2css(col, a.toFixed(3));
+            ctx.fillRect(x, top, 1, bot - top);
+          }
+        }
+      }
+    }
+    ctx.restore();
   }
 
   // --- foliage ---------------------------------------------------------------
 
   // Half-profiles for the conifer silhouettes: [heightFraction, halfWidth].
-  // Three distinct shapes so a treeline never looks like one stamp repeated.
+  // SIX distinct shapes. Combined with per-instance scale, flip, lean, trunk
+  // length and tint jitter, a treeline never repeats a recognisable stamp.
   static CONIFERS = [
     // 0: narrow spire
     [[0, 1.00], [0.16, 0.52], [0.30, 0.80], [0.46, 0.42], [0.60, 0.64],
@@ -678,32 +847,41 @@ export class Environment {
     // 2: sparse / lopsided with a bare top
     [[0, 0.92], [0.18, 0.44], [0.32, 0.74], [0.52, 0.34], [0.66, 0.52],
      [0.82, 0.16], [0.90, 0.22], [1, 0.0]],
+    // 3: squat and wide with a blunt crown
+    [[0, 1.14], [0.20, 0.80], [0.36, 1.04], [0.56, 0.62], [0.74, 0.58],
+     [0.90, 0.24], [1, 0.0]],
+    // 4: tall thin cypress
+    [[0, 0.60], [0.25, 0.46], [0.50, 0.52], [0.72, 0.32], [0.88, 0.26], [1, 0.0]],
+    // 5: storm-battered, one heavy shoulder
+    [[0, 0.98], [0.14, 0.50], [0.28, 0.90], [0.40, 0.38], [0.55, 0.84],
+     [0.70, 0.28], [0.86, 0.34], [1, 0.0]],
   ];
 
-  _drawConifer(ctx, x, base, w, h, variant, asym, lean) {
-    const P = Environment.CONIFERS[variant % 3];
+  // All tree helpers draw with the BASE at the local origin, growing toward
+  // -y, so the caller owns position/flip/lean via the canvas transform.
+  _drawConifer(ctx, w, h, variant, asym, trunk) {
+    const T = Environment.CONIFERS;
+    const P = T[variant % T.length];
+    if (trunk > 0.4) ctx.fillRect(-w * 0.10, -trunk - 0.5, w * 0.20, trunk + 1);
     ctx.beginPath();
-    ctx.moveTo(x - w * P[0][1], base);
-    for (let i = 1; i < P.length; i++) {
-      const t = P[i][0], f = P[i][1];
-      ctx.lineTo(x - w * f + lean * t * w, base - h * t);
-    }
+    ctx.moveTo(-w * P[0][1], -trunk);
+    for (let i = 1; i < P.length; i++) ctx.lineTo(-w * P[i][1], -trunk - h * P[i][0]);
     for (let i = P.length - 2; i >= 0; i--) {
-      const t = P[i][0], f = P[i][1] * asym;
-      ctx.lineTo(x + w * f + lean * t * w, base - h * t);
+      ctx.lineTo(w * P[i][1] * asym, -trunk - h * P[i][0]);
     }
     ctx.closePath();
     ctx.fill();
   }
 
-  _drawBroadleaf(ctx, x, base, w, h, rng) {
-    // Trunk + a small union of overlapping canopy discs, all inside ONE path
-    // that starts and ends on the ground line, so nothing ever chords.
+  _drawRound(ctx, w, h, rng) {
+    // Trunk + a union of overlapping canopy discs; each is its own closed
+    // path, so nothing ever chords across the silhouette.
+    const tr = h * (0.30 + rng() * 0.24);
     ctx.beginPath();
-    ctx.moveTo(x - w * 0.16, base);
-    ctx.lineTo(x - w * 0.12, base - h * 0.45);
-    ctx.lineTo(x + w * 0.12, base - h * 0.45);
-    ctx.lineTo(x + w * 0.16, base);
+    ctx.moveTo(-w * 0.15, 0);
+    ctx.lineTo(-w * 0.09, -tr);
+    ctx.lineTo(w * 0.09, -tr);
+    ctx.lineTo(w * 0.15, 0);
     ctx.closePath();
     ctx.fill();
     const lobes = 3 + ((rng() * 3) | 0);
@@ -711,13 +889,43 @@ export class Environment {
     for (let i = 0; i < lobes; i++) {
       const f = lobes === 1 ? 0.5 : i / (lobes - 1);
       const hump = Math.sin(f * Math.PI);
-      const lx = x + (f - 0.5) * w * 1.05;
-      const ly = base - h * (0.62 + 0.24 * hump) - (rng() - 0.5) * h * 0.08;
+      const lx = (f - 0.5) * w * 1.05;
+      const ly = -h * (0.62 + 0.24 * hump) - (rng() - 0.5) * h * 0.08;
       const r = w * (0.34 + 0.22 * hump + rng() * 0.10);
       ctx.moveTo(lx + r, ly);
       ctx.arc(lx, ly, r, 0, Math.PI * 2);
     }
     ctx.fill();
+  }
+
+  _drawUmbrella(ctx, w, h, rng) {
+    const tr = h * (0.54 + rng() * 0.16);
+    ctx.beginPath();
+    ctx.moveTo(-w * 0.12, 0);
+    ctx.quadraticCurveTo(-w * 0.03, -tr * 0.6, -w * 0.07, -tr);
+    ctx.lineTo(w * 0.07, -tr);
+    ctx.quadraticCurveTo(w * 0.03, -tr * 0.6, w * 0.12, 0);
+    ctx.closePath();
+    ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(0, -h * 0.80, w * 0.70, h * (0.16 + rng() * 0.07), 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(-w * (0.20 + rng() * 0.20), -h * 0.68, w * 0.34, h * 0.12, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  _drawSnag(ctx, w, h) {
+    ctx.save();
+    ctx.lineCap = 'round';
+    ctx.lineWidth = Math.max(0.7, w * 0.17);
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.quadraticCurveTo(w * 0.16, -h * 0.5, w * 0.03, -h);
+    ctx.moveTo(w * 0.07, -h * 0.56); ctx.lineTo(-w * 0.44, -h * 0.80);
+    ctx.moveTo(w * 0.05, -h * 0.38); ctx.lineTo(w * 0.48, -h * 0.60);
+    ctx.stroke();
+    ctx.restore();
   }
 
   paintForest(ctx, ridgeY, toCy, L, rng, CW) {
@@ -727,68 +935,219 @@ export class Environment {
     // is correctly smaller on the farther planes.
     const sc = CW / L.width;
     const dark = mixRgb(desat(hex2rgb(B.tree), L.haze * 0.55),
-                        hex2rgb(B.hazeCool), L.haze * 0.78);
-    const lit = mixRgb(dark, hex2rgb(B.crest), 0.30);
-    // Density field: low-frequency noise so trees form clumps and clearings
-    // instead of a metronomic row.
-    const dens = fractalRidge(rng, 32, 0.62);
-    const snowLine = L.base + L.amp * (B.snow ? 0.72 : 0.92);
-    const treeLow = L.base + L.amp * 0.06;
+                        hex2rgb(B.hazeCool), L.haze * 0.80);
+    const lit = mixRgb(dark, hex2rgb(B.crest), 0.32);
+    // The autumn grove: the ONE saturated foliage accent in the backdrop, and
+    // hazed far less than the surrounding conifers so it actually reads.
+    const fall = mixRgb(desat(hex2rgb(B.fall), L.haze * 0.28),
+                        hex2rgb(B.hazeWarm), L.haze * 0.62);
+    const snowLine = L.base + L.amp * (B.snow ? 0.74 : 0.94);
+    const treeLow = L.base + L.amp * 0.05;
 
     const slopeAt = (x) => {
       const a = ridgeY[Math.max(0, x - 6)], b = ridgeY[Math.min(CW, x + 6)];
       return Math.abs(b - a) / 12; // world units per canvas px
     };
 
-    const nominal = 32 * sc;        // world spacing -> canvas px
-    let x = rng() * nominal;
-    let guard = 0;
-    while (x < CW && guard++ < 4000) {
-      const xi = Math.round(x);
-      x += nominal * (0.55 + rng() * 1.15);
+    const plant = (px, isFall) => {
+      const xi = Math.round(px);
+      if (xi < 2 || xi > CW - 2) return;
       const ry = ridgeY[xi];
-      if (ry > snowLine || ry < treeLow) continue;         // above snow / in mist
-      if (slopeAt(xi) * sc > 1.15) continue;               // bare cliff face
-      const d = sampleRidge(dens, xi / CW);
-      if (rng() > 0.26 + d * 0.70) continue;               // clumps and gaps
-      // Base sits ON the sampled ridge, sunk a couple of px so the trunk bites.
+      if (ry > snowLine || ry < treeLow) return;   // above snow / down in mist
+      if (slopeAt(xi) * sc > 1.3) return;          // bare cliff face
+      // Log-uniform scale 0.65..1.45 so SMALL trees dominate the population
+      // and the occasional giant reads as a giant.
+      const s = 0.65 * Math.pow(1.45 / 0.65, rng());
+      const hW = (24 + rng() * 14) * s * sc;
+      const wW = hW * (0.30 + rng() * 0.16);
+      if (hW < 1.2) return;
       const base = toCy(ry) + 3 * sc;
-      const hW = (20 + rng() * 26) * sc;                   // world-height
-      const wW = hW * (0.28 + rng() * 0.14);
-      const broad = B.trees === 'broadleaf' ||
-        (B.trees === 'mixed' && rng() < 0.25);
-      ctx.fillStyle = rgb2css(dark, (0.92 - L.haze * 0.12).toFixed(3));
-      if (broad) {
-        this._drawBroadleaf(ctx, xi, base, wW * 1.15, hW * 0.92, rng);
+      // +/-6% value jitter per instance: the mass gets internal texture
+      // instead of reading as one flat alpha.
+      const j = 1 + (rng() - 0.5) * 0.12;
+      const src = isFall ? fall : dark;
+      const col = [Math.min(255, src[0] * j), Math.min(255, src[1] * j),
+                   Math.min(255, src[2] * j)];
+      ctx.fillStyle = rgb2css(col, (0.93 - L.haze * 0.10).toFixed(3));
+      ctx.strokeStyle = ctx.fillStyle;
+      const fx = rng() < 0.5 ? -1 : 1;             // 50% horizontal flip
+      ctx.save();
+      ctx.translate(xi, base);
+      ctx.rotate((rng() - 0.5) * 0.105);           // +/-3 degrees of lean
+      ctx.scale(fx, 1);
+      let kind;
+      if (isFall) kind = rng() < 0.72 ? 'round' : 'umbrella';
+      else if (B.trees === 'broadleaf') kind = rng() < 0.70 ? 'round' : (rng() < 0.55 ? 'umbrella' : 'conifer');
+      else if (B.trees === 'mixed') kind = rng() < 0.60 ? 'conifer' : (rng() < 0.55 ? 'round' : 'umbrella');
+      else kind = rng() < 0.88 ? 'conifer' : 'round';
+      if (rng() < 0.05) kind = 'snag';
+      if (kind === 'conifer') {
+        this._drawConifer(ctx, wW, hW, (rng() * 6) | 0,
+          0.80 + rng() * 0.42, hW * (0.02 + rng() * 0.12));
+      } else if (kind === 'round') {
+        this._drawRound(ctx, wW * 1.18, hW * 0.92, rng);
+      } else if (kind === 'umbrella') {
+        this._drawUmbrella(ctx, wW * 1.30, hW * 0.80, rng);
       } else {
-        this._drawConifer(ctx, xi, base, wW, hW,
-          (rng() * 3) | 0, 0.82 + rng() * 0.38, (rng() - 0.5) * 0.24);
+        this._drawSnag(ctx, wW, hW * 0.85);
       }
-      // Sun-side sliver on a minority of trees: reads as light catching the
-      // canopy, and breaks the flat-silhouette monotony without an outline.
-      if (rng() < 0.30 && L.haze < 0.6) {
+      // Sun-side sliver on a minority of trees: light catching the canopy.
+      // Placed at -x in FLIPPED space so it always lands on the sun side.
+      if (rng() < 0.30 && L.haze < 0.62 && kind !== 'snag') {
         ctx.fillStyle = rgb2css(lit, 0.34);
         ctx.beginPath();
-        ctx.moveTo(xi - wW * 0.55, base - hW * 0.18);
-        ctx.lineTo(xi - wW * 0.10, base - hW * 0.92);
-        ctx.lineTo(xi - wW * 0.02, base - hW * 0.55);
+        ctx.moveTo(-fx * wW * 0.55, -hW * 0.18);
+        ctx.lineTo(-fx * wW * 0.10, -hW * 0.92);
+        ctx.lineTo(-fx * wW * 0.02, -hW * 0.55);
         ctx.closePath();
         ctx.fill();
       }
+      ctx.restore();
+    };
+
+    // GROVES, not a sprinkle: 6-10 centres per band with the population
+    // falling off from each, so real bare ridgeline survives between them.
+    const nG = 6 + ((rng() * 5) | 0);
+    const groves = [];
+    for (let i = 0; i < nG; i++) {
+      groves.push({
+        x: ((i + 0.10 + rng() * 0.80) / nG) * CW,
+        r: CW * (0.020 + rng() * 0.055),
+        n: 10 + ((rng() * 26) | 0),
+        fall: false,
+      });
     }
+    if (L.fall && groves.length) {
+      const g = groves[(rng() * groves.length) | 0];
+      g.fall = true;
+      g.n = Math.max(g.n, 22);
+      g.r = Math.max(g.r, CW * 0.030);
+    }
+    for (const g of groves) {
+      for (let i = 0; i < g.n; i++) {
+        // Sum-of-three-uniforms: a soft bell, densest at the grove centre.
+        const off = (rng() + rng() + rng() - 1.5) * g.r * 1.4;
+        plant(g.x + off, g.fall);
+      }
+    }
+    // A handful of loners so the clearings are not surgically empty.
+    const strays = 5 + ((rng() * 7) | 0);
+    for (let i = 0; i < strays; i++) plant(rng() * CW, false);
   }
 
   // One silhouetted man-made landmark per near layer: something for the eye to
   // land on so the ridges stop reading as generated noise.
   paintLandmark(ctx, ridgeY, toCy, L, rng, CW, picked) {
     const B = this.biome;
+    const CH = ctx.canvas.height;
+    const sc = CW / L.width;
+    const col = mixRgb(desat(hex2rgb(B.tree), L.haze * 0.6),
+                       hex2rgb(B.hazeCool), L.haze * 0.85);
+    const kind = L.landmark;
+
+    // --- props that span the terrain rather than standing on one crest ------
+    if (kind === 'bridge') {
+      // Rope bridge slung between two crests, with a real catenary sag,
+      // hangers and stubby end pylons.
+      let best = -1, bi = 0;
+      for (let i = 0; i + 1 < picked.length; i++) {
+        const sp = picked[i + 1] - picked[i];
+        if (sp > CW * 0.05 && sp < CW * 0.20 && sp > best) { best = sp; bi = i; }
+      }
+      if (best < 0) return;
+      const x1 = picked[bi], x2 = picked[bi + 1];
+      const y1 = toCy(ridgeY[x1]) + 2, y2 = toCy(ridgeY[x2]) + 2;
+      const sag = best * 0.15;
+      const rail = best * 0.055;
+      const lw = Math.max(1.1, 2.6 * sc);
+      ctx.save();
+      ctx.strokeStyle = rgb2css(col, 0.88);
+      ctx.fillStyle = rgb2css(col, 0.88);
+      ctx.lineCap = 'round';
+      const deck = (t) => {
+        const x = x1 + (x2 - x1) * t;
+        const y = y1 + (y2 - y1) * t + 4 * sag * t * (1 - t);
+        return [x, y];
+      };
+      ctx.lineWidth = lw;
+      ctx.beginPath();
+      for (let i = 0; i <= 24; i++) { const [x, y] = deck(i / 24); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }
+      ctx.stroke();
+      ctx.lineWidth = lw * 0.6;
+      ctx.beginPath();
+      for (let i = 0; i <= 24; i++) {
+        const [x, y] = deck(i / 24);
+        const yy = y - rail - 2 * sag * 0.25 * (i / 24) * (1 - i / 24);
+        i ? ctx.lineTo(x, yy) : ctx.moveTo(x, yy);
+      }
+      ctx.stroke();
+      for (let i = 1; i < 8; i++) {
+        const [x, y] = deck(i / 8);
+        ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x, y - rail); ctx.stroke();
+      }
+      // End pylons.
+      for (const [px, py] of [[x1, y1], [x2, y2]]) {
+        ctx.fillRect(px - lw, py - rail * 2.1, lw * 2, rail * 2.1);
+      }
+      ctx.restore();
+      return;
+    }
+
+    if (kind === 'cascade') {
+      // Waterfall ribbon down a cliff: the backdrop's saturated cool accent.
+      // Deliberately hazed FAR less than the rock so it keeps its chroma.
+      const cx = picked[(rng() * picked.length) | 0];
+      const topY = toCy(ridgeY[cx]) + 4 * sc;
+      const len = CH * (0.11 + rng() * 0.10);
+      const w = Math.max(1.6, (3.0 + rng() * 2.2) * sc);
+      const water = mixRgb(desat(hex2rgb(B.cascade), L.haze * 0.30),
+                           hex2rgb(B.hazeCool), L.haze * 0.55);
+      const foam = mixRgb(water, [255, 255, 255], 0.55);
+      ctx.save();
+      // A darker notch in the rock so the fall is seated in a cleft.
+      ctx.fillStyle = `rgba(16,32,66,${(0.16 * (1 - L.haze * 0.6)).toFixed(3)})`;
+      ctx.beginPath();
+      ctx.moveTo(cx - w * 2.6, topY);
+      ctx.lineTo(cx + w * 2.6, topY);
+      ctx.lineTo(cx + w * 3.4, topY + len * 1.05);
+      ctx.lineTo(cx - w * 3.4, topY + len * 1.05);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = rgb2css(water, 0.92);
+      ctx.beginPath();
+      ctx.moveTo(cx - w, topY);
+      ctx.lineTo(cx + w, topY);
+      ctx.quadraticCurveTo(cx + w * 1.9, topY + len * 0.6, cx + w * 1.7, topY + len);
+      ctx.lineTo(cx - w * 1.7, topY + len);
+      ctx.quadraticCurveTo(cx - w * 1.9, topY + len * 0.6, cx - w, topY);
+      ctx.closePath();
+      ctx.fill();
+      // Bright inner thread + the plunge pool's foam.
+      ctx.fillStyle = rgb2css(foam, 0.75);
+      ctx.fillRect(cx - w * 0.35, topY, w * 0.7, len * 0.92);
+      ctx.beginPath();
+      ctx.ellipse(cx, topY + len, w * 2.6, w * 1.1, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.filter = `blur(${Math.max(2, 3 * sc)}px)`;
+      ctx.fillStyle = rgb2css(foam, 0.34);
+      ctx.beginPath();
+      ctx.ellipse(cx, topY + len, w * 4.2, w * 2.4, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.filter = 'none';
+      ctx.restore();
+      return;
+    }
+
+    // --- props that stand on one crest -------------------------------------
     const cx = picked[(rng() * picked.length) | 0];
     const gy = toCy(ridgeY[Math.max(0, Math.min(CW, cx))]) + 3;
     // Local art is ~95 units tall; aim for a ~72 world-unit landmark so it is a
     // readable silhouette without turning into a dark wedge on the ridge.
-    const s = (0.62 + rng() * 0.2) * (CW / L.width) * 1.15;
-    const col = mixRgb(desat(hex2rgb(B.tree), L.haze * 0.6),
-                       hex2rgb(B.hazeCool), L.haze * 0.85);
+    const s = (0.62 + rng() * 0.2) * sc * 1.15;
+    // Warm window light: only close enough to read, and drawn AFTER the
+    // silhouette so it punches a saturated hole in the cool backdrop.
+    const litOK = L.haze < 0.45;
+    const litCol = hex2rgb(B.lit);
     ctx.save();
     ctx.translate(cx, gy);
     ctx.scale(s, s);
@@ -796,10 +1155,11 @@ export class Environment {
     ctx.strokeStyle = rgb2css(col, 0.9);
     ctx.lineCap = 'round';
 
-    if (L.landmark === 'huts') {
-      // A little hamlet clinging to the ridge: three huts of different sizes
-      // plus a thin chimney, each its own closed shape.
-      for (const [ox, w, h] of [[-34, 15, 17], [-2, 21, 24], [28, 13, 14]]) {
+    if (kind === 'huts') {
+      // A little hamlet clinging to the ridge: four cottages of different
+      // sizes plus a thin chimney, each its own closed shape.
+      const roofs = [[-42, 13, 15], [-16, 17, 20], [10, 22, 25], [40, 12, 13]];
+      for (const [ox, w, h] of roofs) {
         ctx.beginPath();
         ctx.moveTo(ox - w, 0);
         ctx.lineTo(ox - w, -h * 0.55);
@@ -809,8 +1169,20 @@ export class Environment {
         ctx.closePath();
         ctx.fill();
       }
-      ctx.fillRect(2, -34, 4, 12);
-    } else if (L.landmark === 'windmill') {
+      ctx.fillRect(14, -35, 4, 12);
+      if (litOK) {
+        ctx.fillStyle = rgb2css(litCol, 0.95);
+        for (const [ox, , h] of roofs) {
+          if (rng() < 0.3) continue;
+          ctx.fillRect(ox - 3, -h * 0.42, 6, 6);
+        }
+        ctx.save();
+        ctx.filter = 'blur(4px)';
+        ctx.fillStyle = rgb2css(litCol, 0.42);
+        for (const [ox, , h] of roofs) ctx.fillRect(ox - 8, -h * 0.42 - 5, 16, 16);
+        ctx.restore();
+      }
+    } else if (kind === 'windmill') {
       // Tapered tower + cap + four sails at a jaunty angle.
       ctx.beginPath();
       ctx.moveTo(-16, 0); ctx.lineTo(-9, -52); ctx.lineTo(9, -52); ctx.lineTo(16, 0);
@@ -827,6 +1199,42 @@ export class Environment {
         ctx.lineTo(Math.cos(a) * 34, -58 + Math.sin(a) * 34);
         ctx.stroke();
       }
+    } else if (kind === 'lighthouse') {
+      // Tapered stack + gallery + a warm lamp: a second saturated accent.
+      ctx.beginPath();
+      ctx.moveTo(-13, 0); ctx.lineTo(-7, -54); ctx.lineTo(7, -54); ctx.lineTo(13, 0);
+      ctx.closePath(); ctx.fill();
+      ctx.fillRect(-11, -62, 22, 8);
+      ctx.beginPath();
+      ctx.moveTo(-8, -62); ctx.lineTo(-6, -76); ctx.lineTo(6, -76); ctx.lineTo(8, -62);
+      ctx.closePath(); ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(-9, -76); ctx.lineTo(0, -88); ctx.lineTo(9, -76);
+      ctx.closePath(); ctx.fill();
+      if (litOK) {
+        ctx.fillStyle = rgb2css(litCol, 0.98);
+        ctx.fillRect(-5, -75, 10, 12);
+        ctx.filter = 'blur(6px)';
+        ctx.fillStyle = rgb2css(litCol, 0.55);
+        ctx.beginPath(); ctx.arc(0, -69, 17, 0, Math.PI * 2); ctx.fill();
+        ctx.filter = 'none';
+      }
+    } else if (kind === 'arch') {
+      // Wind-cut rock arch: two unequal legs under a sagging span.
+      ctx.beginPath();
+      ctx.moveTo(-40, 0);
+      ctx.lineTo(-34, -30);
+      ctx.quadraticCurveTo(-30, -56, 0, -60);
+      ctx.quadraticCurveTo(26, -57, 30, -34);
+      ctx.lineTo(38, 0);
+      ctx.lineTo(20, 0);
+      ctx.lineTo(16, -30);
+      ctx.quadraticCurveTo(4, -46, -12, -32);
+      ctx.lineTo(-19, 0);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillRect(46, -9, 9, 9);
+      ctx.fillRect(-54, -6, 7, 6);
     } else {
       // Broken watchtower: battlements on one side, sheared open on the other.
       ctx.beginPath();
@@ -842,6 +1250,10 @@ export class Environment {
       // A couple of tumbled blocks at the foot.
       ctx.fillRect(18, -7, 8, 7);
       ctx.fillRect(-26, -5, 6, 5);
+      if (litOK) {
+        ctx.fillStyle = rgb2css(litCol, 0.9);
+        ctx.fillRect(-11, -52, 5, 7);
+      }
     }
     ctx.restore();
   }
@@ -892,10 +1304,15 @@ export class Environment {
       const lumps = 5 + ((rng() * 4) | 0);
       for (let i = 0; i < lumps; i++) {
         const f = (i + 0.5) / lumps;
-        const cx = f * W + (rng() - 0.5) * 40;
-        const cy = H * 0.5 + (rng() - 0.5) * 26;
-        const rx = W * (0.10 + rng() * 0.13);
-        const ry = H * (0.16 + rng() * 0.20);
+        // Keep every lump strictly INSIDE the bitmap. A gradient blob that
+        // overshoots the canvas gets clipped by the bitmap edge, and once the
+        // plane is composited that clip reads as a ruled translucent
+        // quadrilateral floating over the ridges — the exact alpha-blend
+        // artifact the backdrop was called out for.
+        const cx = (0.22 + f * 0.56) * W + (rng() - 0.5) * 24;
+        const cy = H * 0.5 + (rng() - 0.5) * 18;
+        const rx = W * (0.07 + rng() * 0.08);
+        const ry = H * (0.14 + rng() * 0.16);
         const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, rx);
         g.addColorStop(0, `rgba(${tint},0.55)`);
         g.addColorStop(0.55, `rgba(${tint},0.22)`);
@@ -951,18 +1368,28 @@ export class Environment {
     // 640px cloud roof" the critique called out — so no lobe may reach it.
     const maxR = h * 0.30;
     const span = w * (0.40 + rng() * 0.32);
+    // The baseline is an ARC, not a rule: lobe feet ride a shallow curve so
+    // the underside can never come out as one horizontal cut.
+    const arch = h * (0.03 + rng() * 0.09);
+    const archDir = rng() < 0.5 ? 1 : -1;
+    const baseAt = (f) => baseY - archDir * arch * Math.sin(Math.PI * f)
+                        - (1 - archDir) * 0;
     const lobes = [];
-    const n = 4 + ((rng() * 4) | 0);
+    // 8-14 lobes with log-ish radii: a couple of big masses and a lot of
+    // little ones, which is what a union of same-size circles never gives you.
+    const n = 8 + ((rng() * 7) | 0);
     const bias = 0.25 + rng() * 0.5;          // where the tall mass sits
     for (let i = 0; i < n; i++) {
       const f = n === 1 ? 0.5 : i / (n - 1);
       const hump = Math.pow(Math.max(0, Math.sin(Math.PI *
         Math.min(1, Math.max(0, (f - bias) * 0.85 + 0.5)))), 0.9);
-      const r = maxR * (0.30 + 0.50 * hump + rng() * 0.20);
-      const cy = baseY - r * 0.52 - hump * maxR * (0.20 + rng() * 0.34)
+      const u = rng();
+      const r = maxR * Math.max(0.13, Math.min(1.0,
+        (0.15 + 0.85 * u * u) * (0.55 + 0.75 * hump)));
+      const cy = baseAt(f) - r * 0.52 - hump * maxR * (0.20 + rng() * 0.34)
                - (rng() - 0.5) * maxR * 0.14;
       lobes.push({
-        x: w / 2 + (f - 0.5) * span + (rng() - 0.5) * 10,
+        x: w / 2 + (f - 0.5) * span + (rng() - 0.5) * 14,
         y: Math.max(r + 8, cy),
         r,
       });
@@ -1007,50 +1434,91 @@ export class Environment {
       prev = p;
     }
 
-    // Silhouette. Not paper-white: bloom grabs anything over ~0.9 luminance and
-    // a blooming cloud is what turns the sky into a milky wash.
-    ctx.fillStyle = '#f7fbff';
-    ctx.beginPath();
-    for (const L of lobes) { ctx.moveTo(L.x + L.r, L.y); ctx.arc(L.x, L.y, L.r, 0, Math.PI * 2); }
-    ctx.fill();
+    // --- silhouette, built on its own sheet ---------------------------------
+    // Separate so the union outline can be FEATHERED before the volume ramp
+    // goes on. A crisp circle-union edge is the canonical programmer cloud;
+    // a blurred copy underneath at 60% alpha is what dissolves it.
+    const sil = document.createElement('canvas');
+    sil.width = w; sil.height = h;
+    const sx = sil.getContext('2d');
+    // Not paper-white: bloom grabs anything over ~0.9 luminance and a blooming
+    // cloud is what turns the sky into a milky wash.
+    sx.fillStyle = '#f7fbff';
+    sx.beginPath();
+    for (const L of lobes) { sx.moveTo(L.x + L.r, L.y); sx.arc(L.x, L.y, L.r, 0, Math.PI * 2); }
+    sx.fill();
 
-    // Scalloped underside. Control points sag 8-15% of the cloud's height under
-    // each lobe and lift between them, so the bottom edge is a run of shallow
-    // bellies instead of a ruler line.
     const bodyH = baseY - Math.min(...lobes.map((L) => L.y - L.r));
     const feet = lobes.slice().sort((a, b) => a.x - b.x);
+    const x0 = feet[0].x - feet[0].r, x1 = feet[feet.length - 1].x + feet[feet.length - 1].r;
+
+    // ERODE. Two or three subtractive lobes chew into the base and one nicks
+    // the crown, so the outline is an asymmetric scalloped mass instead of the
+    // outer envelope of a row of circles.
+    sx.save();
+    sx.globalCompositeOperation = 'destination-out';
+    const bites = 2 + ((rng() * 2) | 0);
+    for (let i = 0; i < bites; i++) {
+      const t = 0.12 + rng() * 0.76;
+      const br = maxR * (0.24 + rng() * 0.40);
+      sx.beginPath();
+      sx.arc(x0 + (x1 - x0) * t, baseAt(t) + br * (0.42 + rng() * 0.45), br, 0, Math.PI * 2);
+      sx.fill();
+    }
+    {
+      const t = 0.15 + rng() * 0.70;
+      const br = maxR * (0.16 + rng() * 0.22);
+      sx.beginPath();
+      sx.arc(x0 + (x1 - x0) * t, baseAt(t) - bodyH * (0.74 + rng() * 0.40), br, 0, Math.PI * 2);
+      sx.fill();
+    }
+    sx.restore();
+
+    // Scalloped underside riding the ARCHED baseline. Control points sag
+    // 8-15% of the cloud's height under each lobe and lift between them, so
+    // the bottom edge is a run of shallow bellies, never a ruler line.
     const sagPhase = rng() * Math.PI * 2;
     const nodes = [];
-    const x0 = feet[0].x - feet[0].r, x1 = feet[feet.length - 1].x + feet[feet.length - 1].r;
-    const steps = 4 + ((rng() * 3) | 0);
+    const steps = 5 + ((rng() * 4) | 0);
     for (let i = 0; i <= steps; i++) {
       const t = i / steps;
       const x = x0 + (x1 - x0) * t;
       const sag = bodyH * (0.09 + 0.06 * (0.5 + 0.5 * Math.sin(sagPhase + t * 7.1)));
       const lift = bodyH * 0.05 * Math.sin(sagPhase * 1.7 + t * 11.3);
-      nodes.push({ x, y: baseY + (i === 0 || i === steps ? -bodyH * 0.05 : sag) + lift });
+      nodes.push({ x, y: baseAt(t) + (i === 0 || i === steps ? -bodyH * 0.05 : sag) + lift });
     }
-    const cutPath = (dy) => {
-      ctx.beginPath();
-      ctx.moveTo(-40, h);
-      ctx.lineTo(-40, nodes[0].y + dy);
-      ctx.lineTo(nodes[0].x, nodes[0].y + dy);
+    const cutPath = (g2, dy) => {
+      g2.beginPath();
+      g2.moveTo(-40, h);
+      g2.lineTo(-40, nodes[0].y + dy);
+      g2.lineTo(nodes[0].x, nodes[0].y + dy);
       for (let i = 1; i < nodes.length; i++) {
         const p = nodes[i - 1], q = nodes[i];
-        ctx.quadraticCurveTo((p.x + q.x) / 2, Math.max(p.y, q.y) + bodyH * 0.06 + dy,
-                             q.x, q.y + dy);
+        g2.quadraticCurveTo((p.x + q.x) / 2, Math.max(p.y, q.y) + bodyH * 0.06 + dy,
+                            q.x, q.y + dy);
       }
-      ctx.lineTo(w + 40, nodes[nodes.length - 1].y + dy);
-      ctx.lineTo(w + 40, h);
-      ctx.closePath();
+      g2.lineTo(w + 40, nodes[nodes.length - 1].y + dy);
+      g2.lineTo(w + 40, h);
+      g2.closePath();
     };
-    ctx.save();
-    ctx.globalCompositeOperation = 'destination-out';
+    sx.save();
+    sx.globalCompositeOperation = 'destination-out';
     for (const [dy, a] of [[0, 1], [-2.5, 0.42], [-5, 0.16]]) {
-      ctx.globalAlpha = a;
-      cutPath(dy);
-      ctx.fill();
+      sx.globalAlpha = a;
+      cutPath(sx, dy);
+      sx.fill();
     }
+    sx.restore();
+
+    // Feather (a blurred copy) under the crisp core. Held back on the far
+    // band: a soft cloud over pale far ridges turns into a white smudge.
+    ctx.save();
+    ctx.filter = soft ? 'blur(6px)' : 'blur(8px)';
+    ctx.globalAlpha = soft ? 0.34 : 0.50;
+    ctx.drawImage(sil, 0, 0);
+    ctx.filter = 'none';
+    ctx.globalAlpha = 1;
+    ctx.drawImage(sil, 0, 0);
     ctx.restore();
 
     // Volume ramp. `soft` clouds (the far parallax band) get almost none:
@@ -1094,6 +1562,13 @@ export class Environment {
     g.addColorStop(1, 'rgba(255,246,226,0)');
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, w, h);
+    // Warm bounce on the underside: the sun is low enough to light the belly,
+    // and a purely grey underbelly is what made these read as cut paper.
+    g = ctx.createLinearGradient(0, baseY - bodyH * 0.30, 0, baseY + bodyH * 0.1);
+    g.addColorStop(0, 'rgba(255,220,190,0)');
+    g.addColorStop(1, `rgba(255,214,180,${(0.25 * sh).toFixed(3)})`);
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, w, h);
     ctx.restore();
 
     const tex = new THREE.CanvasTexture(c);
@@ -1101,8 +1576,46 @@ export class Environment {
     return tex;
   }
 
+  // High cirrus: long thin wind-combed streaks at very low opacity. Their job
+  // is to give the sky a SECOND altitude, so the cumulus band reads as
+  // "nearby" instead of as the only thing up there.
+  makeCirrusTexture(rng) {
+    const w = 512, h = 128;
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    const ctx = c.getContext('2d');
+    ctx.filter = 'blur(4px)';
+    const n = 9 + ((rng() * 7) | 0);
+    for (let i = 0; i < n; i++) {
+      const cy = h * (0.16 + rng() * 0.68);
+      const len = w * (0.16 + rng() * 0.42);
+      const cx = w * (0.10 + rng() * 0.80);
+      const th = 1.4 + rng() * 4.0;
+      const a = 0.28 + rng() * 0.45;
+      const g = ctx.createLinearGradient(cx - len / 2, 0, cx + len / 2, 0);
+      g.addColorStop(0, 'rgba(255,255,255,0)');
+      g.addColorStop(0.35, `rgba(255,255,255,${a.toFixed(3)})`);
+      g.addColorStop(0.62, `rgba(255,255,255,${(a * 0.7).toFixed(3)})`);
+      g.addColorStop(1, 'rgba(255,255,255,0)');
+      ctx.fillStyle = g;
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate((rng() - 0.5) * 0.09);
+      ctx.beginPath();
+      ctx.ellipse(0, 0, len / 2, th, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+    ctx.filter = 'none';
+    const t = new THREE.CanvasTexture(c);
+    t.colorSpace = THREE.SRGBColorSpace;
+    return t;
+  }
+
   buildClouds(rng) {
     this.clouds = [];
+    const cirrus = [this.makeCirrusTexture(rng), this.makeCirrusTexture(rng),
+                    this.makeCirrusTexture(rng)];
     const near = [];
     for (let i = 0; i < 6; i++) near.push(this.makeCloudTexture(rng));
     const far = [];
@@ -1115,6 +1628,10 @@ export class Environment {
     // between ridges 5 and 6). Alpha and tint are bound to depth so the bands
     // separate even in a still frame.
     const bands = [
+      // Cirrus deck, well above everything: thin, wide, almost transparent.
+      // Three is enough to read as a deck, and these are the widest planes in
+      // the scene — every extra one is a full-width transparent overdraw pass.
+      { n: 3, tex: cirrus, z: [-1260, -1200], y: [960, 1300], s: [1500, 2200], op: [0.11, 0.08], ro: -9.5, spd: [0.9, 1.5], ar: [0.10, 0.06], tint: this.biome.cirrus },
       { n: 4, tex: far, z: [-1120, -1060], y: [860, 1140], s: [200, 340], op: [0.44, 0.16], ro: -9.2, spd: [1.8, 2.8], ar: [0.30, 0.16] },
       { n: 6, tex: near, z: [-700, -660], y: [520, 900], s: [260, 420], op: [0.66, 0.16], ro: -8.35, spd: [3.4, 5.2], ar: [0.26, 0.20] },
       { n: 4, tex: near, z: [-400, -360], y: [430, 760], s: [340, 520], op: [0.86, 0.12], ro: -6.7, spd: [6.0, 7.6], ar: [0.24, 0.16] },
@@ -1130,7 +1647,7 @@ export class Environment {
         const m = new THREE.Mesh(
           new THREE.PlaneGeometry(s, s * ar),
           new THREE.MeshBasicMaterial({
-            map: B.tex[pick], transparent: true, color: tint,
+            map: B.tex[pick], transparent: true, color: B.tint || tint,
             opacity: B.op[0] + rng() * B.op[1], depthWrite: false,
           })
         );
@@ -1151,27 +1668,26 @@ export class Environment {
   // --- birds -----------------------------------------------------------------
 
   buildBirds(rng) {
-    // Readable gull silhouette: two swept wings with a small body notch and a
-    // soft cel outline. Big enough to parse (previously these read as dust
-    // specks) but held at low opacity so they stay atmosphere, not clutter.
+    // FILLED gull silhouette — swept wings with real thickness and a body
+    // notch — in a dark desaturated navy. The previous build stroked two thin
+    // arcs in neutral grey, which at this size read as a '~~' pencil squiggle
+    // sitting at the same value as the haze, i.e. dirt on the lens.
     const c = document.createElement('canvas');
     c.width = 128; c.height = 64;
     const ctx = c.getContext('2d');
-    const wing = (lw, style) => {
-      ctx.strokeStyle = style;
-      ctx.lineWidth = lw;
-      ctx.lineCap = 'round';
-      ctx.lineJoin = 'round';
-      ctx.beginPath();
-      ctx.moveTo(10, 46);
-      ctx.quadraticCurveTo(30, 12, 52, 34);
-      ctx.quadraticCurveTo(58, 40, 64, 38);
-      ctx.quadraticCurveTo(70, 40, 76, 34);
-      ctx.quadraticCurveTo(98, 12, 118, 46);
-      ctx.stroke();
-    };
-    wing(11, 'rgba(38,60,86,0.35)');   // soft outline
-    wing(6, 'rgba(46,72,102,0.95)');   // body stroke
+    const body = mixRgb(hex2rgb('#3d4668'), hex2rgb(this.biome.tree), 0.35);
+    ctx.fillStyle = rgb2css(body, 0.96);
+    ctx.beginPath();
+    ctx.moveTo(6, 16);                              // left wingtip
+    ctx.quadraticCurveTo(34, 26, 52, 40);           // leading edge, left wing
+    ctx.quadraticCurveTo(58, 44, 64, 37);           // body notch
+    ctx.quadraticCurveTo(70, 44, 76, 40);
+    ctx.quadraticCurveTo(94, 26, 122, 16);          // leading edge, right wing
+    ctx.quadraticCurveTo(100, 34, 78, 47);          // trailing edge, right
+    ctx.quadraticCurveTo(64, 54, 50, 47);           // belly
+    ctx.quadraticCurveTo(28, 34, 6, 16);            // trailing edge, left
+    ctx.closePath();
+    ctx.fill();
     const tex = new THREE.CanvasTexture(c);
     tex.colorSpace = THREE.SRGBColorSpace;
 
@@ -1182,14 +1698,15 @@ export class Environment {
       const speed = (rng() > 0.5 ? 1 : -1) * (14 + rng() * 10);
       const count = 3 + ((rng() * 3) | 0);
       for (let i = 0; i < count; i++) {
-        const s = 42 + rng() * 26;
+        // 0.7-1.3x across the flock so the birds read at different depths.
+        const s = 54 * (0.7 + rng() * 0.6);
         const m = new THREE.Mesh(
           new THREE.PlaneGeometry(s, s * 0.5),
-          new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false, opacity: 0.4 })
+          new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false, opacity: 0.58 })
         );
         m.position.set(fx + (rng() - 0.5) * 220, fy + (rng() - 0.5) * 120, -430);
         m.scale.x = speed > 0 ? 1 : -1;
-        m.userData = { speed, phase: rng() * Math.PI * 2, baseY: m.position.y };
+        m.userData = { speed, phase: rng() * Math.PI * 2, baseY: m.position.y, flip: m.scale.x };
         m.renderOrder = -6.9;
         this.birds.push(m);
         this.group.add(m);
@@ -1219,6 +1736,10 @@ export class Environment {
         uTerrain: { value: blank },
         uHasTerrain: { value: 0 },
         uWorld: { value: new THREE.Vector2(WORLD_W, WORLD_H) },
+        // Where the key light is, in world x — sparkle clusters toward it.
+        uSunX: { value: -900 },
+        // Blast reaction: (world x, unused, seconds since impact).
+        uSplash: { value: new THREE.Vector3(0, 0, 999) },
         uShallow: { value: new THREE.Color(S.shallow) },
         uMid: { value: new THREE.Color(S.mid) },
         uDeep: { value: new THREE.Color(S.deep) },
@@ -1232,12 +1753,19 @@ export class Environment {
           gl_Position = projectionMatrix * viewMatrix * wp;
         }`,
       fragmentShader: `
-        uniform float uTime, uTop, uWet, uHasTerrain;
+        uniform float uTime, uTop, uWet, uHasTerrain, uSunX;
         uniform sampler2D uTerrain;
         uniform vec2 uWorld;
-        uniform vec3 uShallow, uMid, uDeep, uFoam;
+        uniform vec3 uShallow, uMid, uDeep, uFoam, uSplash;
         varying vec3 vW;
         float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+        // Smooth 1D value noise — the low-frequency term that makes the surf
+        // thicken and thin along the beach instead of running at one width.
+        float vnoise(float x) {
+          float i = floor(x), f = fract(x);
+          float a = hash(vec2(i, 3.7)), b = hash(vec2(i + 1.0, 3.7));
+          return mix(a, b, f * f * (3.0 - 2.0 * f));
+        }
 
         // Terrain coverage at a world point (0 = open sky, 1 = solid land).
         float land(vec2 p) {
@@ -1269,11 +1797,21 @@ export class Environment {
           // e0 is the waterline itself, e1/e2/e3 are nearer swells. Each carries
           // its own foam crest, which is what makes the sea read as water in a
           // still frame rather than a flat cyan slab.
+          // Blast reaction: an expanding pair of swells thrown outward from
+          // the impact, so the sea visibly answers the explosion.
+          float sAge = uSplash.z;
+          float sRing = sAge * 230.0;
+          float sDist = abs(x - uSplash.x);
+          float sEnv = exp(-sAge * 1.05) * smoothstep(0.0, 0.09, sAge)
+                     * step(sAge, 3.0);
+          float sWave = exp(-pow((sDist - sRing) / 85.0, 2.0)) * sEnv;
+
           float e0 = uTop + sin(t * 0.55) * 1.8
                           + sin(x * 0.0062 + t * 0.31) * 7.5
                           + sin(x * 0.0170 + t * 0.90) * 3.6
                           + sin(x * 0.0091 - t * 0.50) * 2.6
-                          + sin(x * 0.0430 + t * 1.60) * 1.1;
+                          + sin(x * 0.0430 + t * 1.60) * 1.1
+                          + sWave * 15.0 * sin(sAge * 8.0 - sDist * 0.02);
           float e1 = e0 - 30.0 + sin(x * 0.0135 - t * 0.75) * 7.0
                                 + sin(x * 0.0295 + t * 1.15) * 3.2;
           float e2 = e1 - 40.0 + sin(x * 0.0088 + t * 0.50) * 9.0
@@ -1325,20 +1863,31 @@ export class Environment {
           col = mix(col, c3, smoothstep(0.0, 2.0, e3 - y));
           col = mix(col, uDeep, smoothstep(6.0, 90.0, e3 - y));
 
-          // Stylised reflection of the land above the waterline: the terrain
-          // texture sampled with a compressed vertical mapping (so the grass
-          // band reaches into the shallow strip the camera actually sees),
-          // wobbled horizontally and tinted into the water colour.
+          // Depth gradient: the water darkens with distance from the shore
+          // INDEPENDENTLY of the wave bands, so the far strip goes properly
+          // deep instead of holding one flat mid-tone.
+          col = mix(col, mix(uDeep, uMid, 0.18), smoothstep(20.0, 210.0, d));
+
+          // Stylised MIRROR of the land above the waterline: the terrain
+          // texture sampled with a compressed vertical mapping (so the cliff
+          // foot and grass band land in the shallow strip the camera actually
+          // sees), wobbled horizontally and tinted into the water colour.
           if (uHasTerrain > 0.5) {
-            float wob = sin(y * 0.085 + t * 1.15) * 6.0 + sin(y * 0.031 - t * 0.6) * 10.0;
+            float wob = sin(y * 0.085 + t * 1.15) * 5.0 + sin(y * 0.031 - t * 0.6) * 9.0;
             vec2 ruv = vec2((x + wob + uWorld.x * 0.5) / uWorld.x,
-                            (e0 + pow(max(d, 0.0), 0.60) * 62.0) / uWorld.y);
+                            (e0 + pow(max(d, 0.0), 0.88) * 3.1) / uWorld.y);
             vec4 tr = texture2D(uTerrain, ruv);
             float inside = step(0.0, ruv.x) * step(ruv.x, 1.0)
                          * step(0.0, ruv.y) * step(ruv.y, 1.0);
-            float rA = tr.a * inside * exp(-d * 0.013) * 0.50;
-            col = mix(col, mix(tr.rgb, uMid, 0.50), rA);
+            float rA = tr.a * inside * exp(-d * 0.022) * 0.34;
+            col = mix(col, mix(tr.rgb, uMid, 0.42), rA);
           }
+
+          // Caustics: two slow interfering ripple fields, brightest in the
+          // shallows and gone by the deep band.
+          float ca = sin((x + sin(d * 0.09 + t * 0.6) * 26.0) * 0.045 - t * 0.9)
+                   * sin((x * 0.028 + d * 0.075) + t * 0.55);
+          col += max(0.0, ca) * 0.075 * exp(-d * 0.028) * vec3(0.75, 1.0, 1.0);
 
           // Broad slow horizontal tone bands (depth-wise, never vertical).
           col += 0.035 * sin(d * 0.05 - t * 0.5) * vec3(0.5, 0.8, 1.0);
@@ -1355,24 +1904,43 @@ export class Environment {
           // right behind it) over a soft underglow with a darker cel line; the
           // inner swells get thinner crests so the parallax reads.
           float lm = land(vec2(x, e0 + 10.0));
-          float fth = 2.6 + 1.8 * sin(x * 0.030 + t * 0.7)
-                          + 1.3 * sin(x * 0.090 + t * 1.4)
-                          + 0.9 * sin(x * 0.037 - t * 0.8)
-                          + lm * 1.6;
-          col = mix(col, mix(uShallow, uFoam, 0.75), smoothstep(13.0, 3.0, d) * 0.30);
+          // Surf thickness rides a LOW-FREQUENCY noise field (plus swell), so
+          // it runs from a thin lick to a fat breaking lip along the beach.
+          // A constant-width white ribbon is the single thing that made this
+          // read as a decal instead of surf.
+          float fth = 3.0
+                    + 5.4 * vnoise(x * 0.0032 + t * 0.05)
+                    + 2.6 * vnoise(x * 0.0125 - t * 0.10)
+                    + 1.4 * sin(x * 0.030 + t * 0.7)
+                    + 0.9 * sin(x * 0.090 + t * 1.4)
+                    + lm * 1.8;
+          col = mix(col, mix(uShallow, uFoam, 0.75), smoothstep(15.0, 3.0, d) * 0.30);
           float cel = smoothstep(fth + 4.5, fth + 1.0, d) * step(fth, d);
           col = mix(col, mix(uDeep, uMid, 0.45), cel * 0.5);
           col = mix(col, uFoam, 1.0 - smoothstep(fth - 1.2, fth + 0.8, d));
           float d1 = e1 - y, d2 = e2 - y, d3 = e3 - y;
-          float f1 = 2.4 + 1.5 * sin(x * 0.075 - t * 1.1);
-          float f2 = 2.1 + 1.3 * sin(x * 0.061 + t * 0.9);
-          float f3 = 1.8 + 1.1 * sin(x * 0.049 - t * 0.7);
-          col = mix(col, uFoam, (1.0 - smoothstep(f1 - 1.0, f1 + 1.4, d1)) * step(0.0, d1) * 0.72);
-          col = mix(col, mix(uFoam, uShallow, 0.2), (1.0 - smoothstep(f2 - 1.0, f2 + 1.4, d2)) * step(0.0, d2) * 0.55);
-          col = mix(col, mix(uFoam, uShallow, 0.4), (1.0 - smoothstep(f3 - 1.0, f3 + 1.4, d3)) * step(0.0, d3) * 0.4);
+          // The seaward lines are BROKEN: a hashed gate cuts them into runs of
+          // 90-200 world units with real gaps, which is how spilling crests
+          // actually behave. A second unbroken line 30 units out just reads as
+          // a second decal.
+          float g1 = smoothstep(0.34, 0.52, vnoise(x * 0.0085 - t * 0.16));
+          float g2 = smoothstep(0.40, 0.58, vnoise(x * 0.0062 + t * 0.11 + 9.0));
+          float g3 = smoothstep(0.44, 0.62, vnoise(x * 0.0049 - t * 0.08 + 21.0));
+          float f1 = 2.4 + 1.9 * vnoise(x * 0.011 + t * 0.2) + 1.1 * sin(x * 0.075 - t * 1.1);
+          float f2 = 2.1 + 1.6 * vnoise(x * 0.009 - t * 0.15) + 1.0 * sin(x * 0.061 + t * 0.9);
+          float f3 = 1.8 + 1.3 * vnoise(x * 0.007 + t * 0.12) + 0.8 * sin(x * 0.049 - t * 0.7);
+          col = mix(col, uFoam, (1.0 - smoothstep(f1 - 1.0, f1 + 1.4, d1)) * step(0.0, d1) * 0.74 * g1);
+          col = mix(col, mix(uFoam, uShallow, 0.2), (1.0 - smoothstep(f2 - 1.0, f2 + 1.4, d2)) * step(0.0, d2) * 0.58 * g2);
+          col = mix(col, mix(uFoam, uShallow, 0.4), (1.0 - smoothstep(f3 - 1.0, f3 + 1.4, d3)) * step(0.0, d3) * 0.42 * g3);
+
+          // Blast: a foaming crest on the outgoing swell, and a churned patch
+          // right where the shell went in.
+          col = mix(col, uFoam, clamp(sWave * 1.5, 0.0, 0.85) * exp(-d * 0.012));
+          col = mix(col, uFoam, exp(-sDist / 55.0) * sEnv * 0.55 * exp(-d * 0.02));
 
           // Specular glints: elongated horizontal slivers (not round dots),
-          // clustered into bands and twinkling.
+          // clustered into bands, twinkling, and DENSER toward the sun's x so
+          // the sheen has a source instead of being evenly sprinkled.
           vec2 sp = vec2(x - t * 6.0, d);
           vec2 scs = vec2(58.0, 34.0);
           vec2 sc = floor(sp / scs);
@@ -1383,7 +1951,8 @@ export class Environment {
           float gl = max(0.0, 1.0 - abs(sr.x) / (7.0 + 5.0 * sh))
                    * max(0.0, 1.0 - abs(sr.y) / 1.6);
           float tw = 0.35 + 0.65 * max(0.0, sin(t * 2.8 + sh * 60.0));
-          col += step(0.72, sh) * band * gl * tw * exp(-d * 0.008) * 0.85;
+          float sunW = 0.32 + 0.95 * exp(-abs(x - uSunX) / 620.0);
+          col += step(0.66, sh) * band * gl * tw * sunW * exp(-d * 0.008) * 0.95;
 
           gl_FragColor = vec4(col, 1.0);
         }`,
@@ -1397,6 +1966,134 @@ export class Environment {
     this.sea.position.set(0, SEA_TOP + 40 - 750, 45);
     this.sea.renderOrder = 8;
     this.group.add(this.sea);
+  }
+
+  // --- cast shadows ------------------------------------------------------------
+
+  // The scene had no cast shadows at all: a mesa 300 units tall threw nothing
+  // onto the ground beside it and a floating island threw nothing onto the
+  // ground below, which is most of why everything read as one flat plane.
+  //
+  // This bakes a directional shadow map ONCE (the occluders — mesa, islands —
+  // do not move) by marching each ground texel toward the sun through the
+  // terrain solidity mask. The march must cross OPEN SKY before it may count
+  // a hit, otherwise every point buried inside the terrain body occludes
+  // itself and the whole landmass goes black.
+  //
+  // The result is composited multiply, masked at draw time against the LIVE
+  // terrain alpha, so a fresh crater never leaves a shadow hanging in mid-air.
+  _buildCastShadow(terrain) {
+    const mask = terrain && terrain.mask;
+    if (!mask || !terrain.w || !terrain.h) return false;
+    const TW = terrain.w, TH = terrain.h;
+    const SW = 256, SH = 128;
+    const c = document.createElement('canvas');
+    c.width = SW; c.height = SH;
+    const ctx = c.getContext('2d');
+    const img = ctx.createImageData(SW, SH);
+    const px = img.data;
+
+    // Direction toward the sun, from SUN_NDC on a 16:9 frame.
+    const dlen = Math.hypot(SUN_NDC.x * (16 / 9), SUN_NDC.y);
+    const dx = (SUN_NDC.x * (16 / 9)) / dlen, dy = SUN_NDC.y / dlen;
+    const STEP = 9, MAXK = 96;
+    const sxWorld = WORLD_W / SW, syWorld = WORLD_H / SH;
+
+    for (let j = 0; j < SH; j++) {
+      const wy0 = WORLD_H - (j + 0.5) * syWorld;
+      for (let i = 0; i < SW; i++) {
+        const wx0 = (i + 0.5) * sxWorld - WORLD_W / 2;
+        let sawSky = false, hit = -1;
+        for (let k = 1; k <= MAXK; k++) {
+          const wx = wx0 + dx * STEP * k;
+          const wy = wy0 + dy * STEP * k;
+          const cx = (wx + TW / 2) | 0;
+          const cy = (TH - wy) | 0;
+          if (cx < 0 || cx >= TW || cy < 0) break;
+          if (cy >= TH) continue;
+          if (mask[cy * TW + cx] !== 1) { sawSky = true; continue; }
+          if (sawSky) { hit = STEP * k; break; }
+        }
+        // 1 = lit, 0 = fully shadowed. Contact shadows are the darkest; a
+        // shadow thrown from 800 units up is a soft wash.
+        let lit = 1;
+        if (hit > 0) lit = 1 - Math.max(0.42, 1 - hit / 1100);
+        const o = (j * SW + i) * 4;
+        const v = Math.round(255 * lit);
+        px[o] = v; px[o + 1] = v; px[o + 2] = v; px[o + 3] = 255;
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+    // Soften: penumbra, and it stops the coarse bake showing its texels.
+    const b = document.createElement('canvas');
+    b.width = SW; b.height = SH;
+    const bx = b.getContext('2d');
+    bx.filter = 'blur(2.4px)';
+    bx.drawImage(c, 0, 0);
+    bx.filter = 'none';
+
+    const tex = new THREE.CanvasTexture(b);
+    tex.colorSpace = THREE.NoColorSpace;   // this is a multiplier, not colour
+    tex.minFilter = THREE.LinearFilter;
+    tex.generateMipmaps = false;
+
+    // Fit the plane to the terrain's vertical extent instead of the whole
+    // world box: this quad is a full-width transparent pass, so every row of
+    // empty sky it covers is pure overdraw.
+    let loY = TH, hiY = 0;
+    for (let cy = 0; cy < TH; cy += 4) {
+      const row = cy * TW;
+      for (let cx = 0; cx < TW; cx += 8) {
+        if (mask[row + cx] === 1) { loY = Math.min(loY, cy); hiY = Math.max(hiY, cy); break; }
+      }
+    }
+    if (loY > hiY) { loY = 0; hiY = TH - 1; }
+    // Canvas rows are y-down; convert to world y and pad for the blur.
+    const wTop = Math.min(WORLD_H, (TH - loY) * (WORLD_H / TH) + 40);
+    const wBot = Math.max(0, (TH - hiY) * (WORLD_H / TH) - 40);
+    const planeH = Math.max(120, wTop - wBot);
+    const uvScale = planeH / WORLD_H, uvOff = wBot / WORLD_H;
+
+    if (this.shadowMesh) {
+      this.shadowMesh.material.uniforms.uShadow.value.dispose?.();
+      this.shadowMesh.material.uniforms.uShadow.value = tex;
+      return true;
+    }
+    const mat = new THREE.ShaderMaterial({
+      uniforms: {
+        uShadow: { value: tex },
+        uTerrainTex: { value: terrain.texture },
+        uTint: { value: new THREE.Color(0.52, 0.49, 0.66) },
+        uUv: { value: new THREE.Vector2(uvScale, uvOff) },
+      },
+      vertexShader: `
+        varying vec2 vUv;
+        void main() {
+          vUv = uv;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }`,
+      fragmentShader: `
+        uniform sampler2D uShadow, uTerrainTex;
+        uniform vec3 uTint;
+        uniform vec2 uUv;      // (scale, offset) mapping this plane into world v
+        varying vec2 vUv;
+        void main() {
+          vec2 uv = vec2(vUv.x, vUv.y * uUv.x + uUv.y);
+          float sh = 1.0 - texture2D(uShadow, uv).r;    // 1 = fully shadowed
+          float a = texture2D(uTerrainTex, uv).a;       // live terrain cover
+          gl_FragColor = vec4(mix(vec3(1.0), uTint, sh * a), 1.0);
+        }`,
+      transparent: true,
+      blending: THREE.MultiplyBlending,
+      premultipliedAlpha: true,   // required by three for MultiplyBlending
+      depthWrite: false,
+      depthTest: false,
+    });
+    this.shadowMesh = new THREE.Mesh(new THREE.PlaneGeometry(WORLD_W, planeH), mat);
+    this.shadowMesh.position.set(0, wBot + planeH / 2, 0.5);
+    this.shadowMesh.renderOrder = 5.5;  // over terrain (5), under mobiles (6+)
+    this.group.add(this.shadowMesh);
+    return true;
   }
 
   // --- per-frame -------------------------------------------------------------
@@ -1423,17 +2120,37 @@ export class Environment {
         b.scale.y = 0.6 + 0.4 * Math.abs(Math.sin(t * 5 + u.phase));
       }
     }
+    const GB = typeof window !== 'undefined' ? window.__GB : null;
+
+    // Cast-shadow bake, once, as soon as the terrain mask exists.
+    if (!this._shadowBaked && GB && GB.terrain) {
+      this._shadowBaked = this._buildCastShadow(GB.terrain);
+    }
+
     if (this.seaMat) {
       this.seaMat.uniforms.uTime.value = t;
       // Grab the terrain texture once it exists so the sea can reflect the
       // land. Lazy, via the debug hook, so the module API stays untouched.
       if (!this.seaMat.uniforms.uHasTerrain.value) {
-        const terrain = typeof window !== 'undefined' && window.__GB
-          ? window.__GB.terrain : null;
+        const terrain = GB ? GB.terrain : null;
         if (terrain && terrain.texture) {
           this.seaMat.uniforms.uTerrain.value = terrain.texture;
           this.seaMat.uniforms.uHasTerrain.value = 1;
         }
+      }
+      if (this.sun) this.seaMat.uniforms.uSunX.value = this.sun.position.x;
+      // Blast reaction. Read-only peek at the FX layer's last impact record:
+      // when a new one appears, start a ripple clock. Guarded so a missing or
+      // renamed field can only mean "no splash", never a crash.
+      const imp = GB && GB.effects ? GB.effects._impact : null;
+      if (imp && imp !== this._lastImpact) {
+        this._lastImpact = imp;
+        this._splashX = imp.x || 0;
+        this._splashT = 0;
+      }
+      if (this._splashT !== undefined && this._splashT < 3.2) {
+        this._splashT += dt || 0;
+        this.seaMat.uniforms.uSplash.value.set(this._splashX || 0, 0, this._splashT);
       }
     }
     if (this.sun) {
@@ -1441,8 +2158,7 @@ export class Environment {
       // source shouldn't parallax like a world prop) and hold it at a constant
       // on-screen size so it is identical in every frame of a match. Grabbed
       // lazily off the debug hook so the frozen Environment API stays intact.
-      const cam = typeof window !== 'undefined' && window.__GB && window.__GB.world
-        ? window.__GB.world.camera : null;
+      const cam = GB && GB.world ? GB.world.camera : null;
       if (cam) {
         this._placeSun(cam);
         // Ease visibility toward the occlusion target (~200ms fade).
@@ -1455,6 +2171,14 @@ export class Environment {
         this.sun.material.opacity = 0.72 + 0.28 * this._sunVis;
         this.sun.visible = true;
         if (this.skyMat) this.skyMat.uniforms.uSunVis.value = this._sunVis;
+        // Light bleed: fades UP exactly as the disc goes behind something, so
+        // the occluder's sun-facing edge gets a warm rim and a soft spill
+        // instead of chopping the glow off with a hard silhouette cut.
+        if (this.sunBleed) {
+          const k = Math.min(1, Math.max(0, (1 - this._sunVis) / 0.45));
+          this.sunBleed.material.opacity = 0.72 * k;
+          this.sunBleed.visible = k > 0.02;
+        }
       }
       const s = this._sunScale * (1 + 0.02 * Math.sin(t * 0.8));
       this.sun.scale.set(s, s, 1);

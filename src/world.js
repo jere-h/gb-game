@@ -18,6 +18,11 @@ import { clamp, lerp } from './util.js';
 const ART_X = 1100;        // max |x| the view may reach at z=0
 const VIEW_BOTTOM = -170;  // lowest world y the view bottom may reach (sea strip)
 const VIEW_TOP = 1500;     // highest world y the view top may reach
+// Lens range. The floor is low enough for a real aim close-up (the mobile has
+// to fill a quarter of the frame height for its face to read), the ceiling
+// wide enough for a whole-map establishing frame.
+const MIN_ZOOM = 500;
+const MAX_ZOOM = 1900;
 
 // --- composition constants (see setComposition / _compose) -------------------
 // Where the shooter sits horizontally, measured from the frame edge BEHIND it:
@@ -50,6 +55,34 @@ const ACTOR_MARGIN_BOT = 0.23;   // fraction of viewport HEIGHT (console)
 // Two-shot framing leans this far toward the story point (crater / focus)
 // before the safe-area clamp pulls it back to include both mobiles.
 const WIDE_ANCHOR_BIAS = 0.34;
+// Establishing frame (turn start, before the player touches the controls):
+// the whole cast in shot, but tighter than the aftermath two-shot so the two
+// beats do not share a lens.
+const ESTABLISH_MARGIN = 0.06;
+// Aim close-up. The lens is a hard push-in from the establishing frame — the
+// state change has to be legible in a single still — and the guard below
+// tightens it further rather than let a floating island be sliced by the top
+// frame edge.
+const AIM_ZOOM = 720;
+const AIM_ZOOM_MIN = 520;
+// Landmark (floating island) framing guard. A landmark half in frame always
+// reads as an accident, so a settled frame either clears its cap with sky
+// (LM_TOP_PAD of the frame height, enough to also clear the HUD player plates)
+// or leaves it out of shot entirely.
+const LM_TOP_PAD = 0.10;
+const LM_SIDE_MARGIN = 0.035;  // fraction of viewport WIDTH, per side
+const LM_MAX_WIDEN = 1.4;      // most the guard may dolly out to save a landmark
+const LM_CLEAR_PAD = 40;       // world units of sky below a landmark left out of frame
+// Impact framing. The director (effects.js) punches in on the blast and centres
+// it; these re-frame that punch so the fireball is not a bullseye in an empty
+// lens: wider, blast high-left of centre with the ground it carved and — where
+// the cast allows — a mobile in the same shot for scale.
+const IMPACT_WIDEN = 1.17;
+// Blast height in frame, fraction from the top. High enough that the crater it
+// carved and the ground around it are the bottom of the shot — but not so high
+// that the frame drops off the cliff and fills its lower third with open sea.
+const IMPACT_FRAME_Y = 0.43;
+const IMPACT_LEAD = 0.06;      // blast offset AGAINST travel, fraction of width
 
 export class World {
   constructor(canvas) {
@@ -81,6 +114,9 @@ export class World {
     this.target = { x: 0, y: WORLD_H * 0.3, zoom: 1400 };
     this.pos = { ...this.target };
     this.punchT = 0; // impact zoom-punch impulse (0..1, decays)
+    this._impMix = 0;  // 0..1 blend into the composed impact frame
+    this._impF = null; // last composed impact frame (held through the fade out)
+    this._band = null; // cast bounds from the last wide framing pass
     // Shot composition brief, refreshed every frame by main.js (see
     // setComposition). null = leave the follow target exactly as handed over.
     this.compose = null;
@@ -148,7 +184,7 @@ export class World {
   // safe area, dollying OUT when they cannot all fit at the current lens.
   // Used for the aftermath beat and the hand-over to the next player, where a
   // still frame is what the player (and a reviewer) actually looks at.
-  _frameWide(t, c) {
+  _frameWide(t, c, margin = ACTOR_MARGIN) {
     const actors = c.actors;
     if (!actors || !actors.length) return false;
     const tanH = Math.tan((this.camera.fov * Math.PI) / 360);
@@ -161,35 +197,45 @@ export class World {
       yHi = Math.max(yHi, a.y + a.h);
     }
     // Lens wide enough that the whole actor band fits between the side margins.
-    const needHalfW = (hi - lo) / (2 * (1 - 2 * ACTOR_MARGIN));
+    const needHalfW = (hi - lo) / (2 * (1 - 2 * margin));
     const needHalfH = (yHi - yLo) / (2 * (1 - ACTOR_MARGIN_TOP - ACTOR_MARGIN_BOT));
     const need = Math.max(needHalfW / (tanH * aspect), needHalfH / tanH);
     // Never zoom IN here: the aftermath push-out is the director's call, this
     // pass only widens far enough to keep the cast whole.
-    t.zoom = clamp(Math.max(t.zoom, need), 620, 1900);
+    t.zoom = clamp(Math.max(t.zoom, need), MIN_ZOOM, MAX_ZOOM);
 
-    const halfH = tanH * t.zoom;
-    const halfW = halfH * aspect;
+    this._band = { lo, hi, yLo, yHi };
+    this._leanWide(t, c, margin, true);
+    return true;
+  }
+
+  // Place a wide frame's centre: lean toward the story point, then clamp back
+  // into the cast's safe area. Split out of _frameWide so it can be re-run
+  // after the landmark guard has changed the lens (the safe range grows with
+  // the frame, and the lean should use the room it just bought).
+  _leanWide(t, c, margin = ACTOR_MARGIN, withY = true) {
+    const band = this._band;
+    if (!band) return;
+    const { lo, hi, yLo, yHi } = band;
+    const { halfH, halfW } = this.viewHalfExtents(t.zoom);
     const anchor = c.anchor || { x: (lo + hi) / 2, y: (yLo + yHi) / 2 };
-    // Lean toward the story point, then clamp back into the safe area.
-    let x = (lo + hi) / 2 * (1 - WIDE_ANCHOR_BIAS) + anchor.x * WIDE_ANCHOR_BIAS;
-    const mX = halfW * 2 * ACTOR_MARGIN;
+    const x = (lo + hi) / 2 * (1 - WIDE_ANCHOR_BIAS) + anchor.x * WIDE_ANCHOR_BIAS;
+    const mX = halfW * 2 * margin;
     const xMin = hi - halfW + mX, xMax = lo + halfW - mX;
     t.x = xMin > xMax ? (xMin + xMax) / 2 : clamp(x, xMin, xMax);
-
-    let y = (yLo + yHi) / 2 * (1 - WIDE_ANCHOR_BIAS) + anchor.y * WIDE_ANCHOR_BIAS;
+    if (!withY) return;
+    const y = (yLo + yHi) / 2 * (1 - WIDE_ANCHOR_BIAS) + anchor.y * WIDE_ANCHOR_BIAS;
     const yMin = yHi - halfH + halfH * 2 * ACTOR_MARGIN_TOP;
     const yMax = yLo + halfH - halfH * 2 * ACTOR_MARGIN_BOT;
     t.y = yMin > yMax ? (yMin + yMax) / 2 : clamp(y, yMin, yMax);
-    return true;
   }
 
   // Settled-frame guard: nudge `x` so no actor straddles a vertical frame
   // boundary. Each offender is pushed to whichever side is cheaper — fully
   // inside the margin, or fully out of shot — so a mobile is never amputated.
-  _avoidActorClip(x, halfW, actors) {
+  _avoidActorClip(x, halfW, actors, margin = ACTOR_MARGIN) {
     if (!actors || !actors.length) return x;
-    const m = halfW * 2 * ACTOR_MARGIN;
+    const m = halfW * 2 * margin;
     for (let pass = 0; pass < 2; pass++) {
       let worst = 0;
       for (const a of actors) {
@@ -209,13 +255,82 @@ export class World {
     return x;
   }
 
+  // Landmark guard for SETTLED wide frames. The floating islands are the most
+  // characterful things on the map and they live overhead, so a follow frame
+  // slices them into a featureless brown underside more often than not. Here
+  // the frame is dollied out around its own bottom edge — buying sky without
+  // giving up foreground — until the island's grass cap clears the top edge
+  // with room to spare, and then nudged sideways off any island rim it was
+  // cutting. Landmarks that are already fully out of shot are left alone.
+  _frameLandmarks(t, c) {
+    const lms = c.landmarks;
+    if (!lms || !lms.length) return;
+    const tanH = Math.tan((this.camera.fov * Math.PI) / 360);
+    const maxHalfH = tanH * Math.min(t.zoom * LM_MAX_WIDEN, MAX_ZOOM);
+    // Two passes: the sky pad is a fraction of the frame, so widening for it
+    // moves the bar it has to clear.
+    for (let pass = 0; pass < 2; pass++) {
+      const { halfH, halfW } = this.viewHalfExtents(t.zoom);
+      const top = t.y + halfH, bot = t.y - halfH;
+      const pad = 2 * halfH * LM_TOP_PAD;
+      let need = -Infinity;
+      for (const lm of lms) {
+        if (lm.x1 < t.x - halfW || lm.x0 > t.x + halfW) continue; // off to the side
+        if (lm.y0 >= top) continue;            // entirely above the frame: fine
+        if (lm.y1 + pad <= top) continue;      // already clear, with sky to spare
+        need = Math.max(need, lm.y1 + pad);
+      }
+      if (need === -Infinity) break;
+      const wantHalfH = (need - bot) / 2;
+      const nh = Math.min(wantHalfH, maxHalfH);
+      if (nh > halfH) { t.zoom = nh / tanH; t.y = bot + nh; }
+      else { t.y = Math.max(t.y, need - halfH); break; }
+    }
+    // Sideways: an island rim landing on a vertical frame boundary reads the
+    // same way a sliced mobile does.
+    const { halfW } = this.viewHalfExtents(t.zoom);
+    const boxes = lms.map((l) => ({ x: (l.x0 + l.x1) / 2, hw: (l.x1 - l.x0) / 2 }));
+    t.x = this._avoidActorClip(t.x, halfW, boxes, LM_SIDE_MARGIN);
+  }
+
+  // Tightest-lens answer to the same problem for the AIM close-up, where
+  // dollying out is not an option (the whole point of the beat is the push-in)
+  // and the island sits far above the shooter: pull the lens in until the top
+  // frame edge passes cleanly UNDER the island. Returns the largest zoom that
+  // leaves every overhead landmark out of shot, or 0 when none is in the way.
+  _aimClearZoom(c, gy) {
+    const lms = c.landmarks;
+    if (!lms || !lms.length) return 0;
+    const tanH = Math.tan((this.camera.fov * Math.PI) / 360);
+    const aspect = this.camera.aspect || 16 / 9;
+    const dir = c.facing >= 0 ? 1 : -1;
+    // Monotone: each pass may only tighten. A pass that "loses sight" of the
+    // island because the previous one already tightened past it must not hand
+    // the lens back, or the two answers would fight frame to frame.
+    let zoom = AIM_ZOOM;
+    for (let pass = 0; pass < 2; pass++) {
+      const halfH = tanH * zoom, halfW = halfH * aspect;
+      const x = c.shooter.x + dir * (0.5 - AIM_SHOOTER_X) * 2 * halfW;
+      let lim = zoom;
+      for (const lm of lms) {
+        if (lm.x1 < x - halfW || lm.x0 > x + halfW) continue;
+        const room = lm.y0 - LM_CLEAR_PAD - gy;      // headroom under the island
+        if (room <= 0) continue;
+        lim = Math.min(lim, room / (2 * AIM_GROUND_Y * tanH));
+      }
+      if (lim >= zoom) break;
+      zoom = lim;
+    }
+    return zoom < AIM_ZOOM ? zoom : 0;
+  }
+
   // Clamp a {x, y, zoom} view so the frustum at z=0 stays inside the art.
   _clampView(v) {
     const tanH = Math.tan((this.camera.fov * Math.PI) / 360);
     const aspect = this.camera.aspect || 16 / 9;
     // Zoom cap: half-width of the view at z=0 must fit inside ART_X.
     const maxZoom = ART_X / (tanH * aspect);
-    v.zoom = clamp(v.zoom, 620, Math.min(1900, maxZoom));
+    v.zoom = clamp(v.zoom, MIN_ZOOM, Math.min(MAX_ZOOM, maxZoom));
     const halfH = tanH * v.zoom;
     const halfW = halfH * aspect;
     const xLim = Math.max(0, ART_X - halfW);
@@ -238,11 +353,29 @@ export class World {
     const gy = c.shooter.groundY;
 
     // Turn hand-over / aftermath: compose a two-shot that keeps the whole cast
-    // inside the safe area, dollying out if that is what it takes.
-    if (c.mode === 'wide' && this._frameWide(t, c)) return;
+    // inside the safe area, dollying out if that is what it takes. The
+    // establishing frame at the top of a turn is the same brief with a tighter
+    // margin, so the two beats do not land on the same lens.
+    if (c.mode === 'wide' || c.mode === 'establish') {
+      const margin = c.mode === 'establish' ? ESTABLISH_MARGIN : ACTOR_MARGIN;
+      if (this._frameWide(t, c, margin)) {
+        this._frameLandmarks(t, c);
+        // The widen bought sideways room; spend it leaning back toward the
+        // player whose turn it is instead of sitting dead centre.
+        this._leanWide(t, c, margin, false);
+        this._frameLandmarks(t, c);
+        return;
+      }
+    }
 
     if (c.mode === 'aim') {
       const dir = c.facing >= 0 ? 1 : -1;
+      // Lens: a hard push-in from the establishing frame, tightened further if
+      // that is what it takes to keep an overhead island out of the frame
+      // rather than sliced by its top edge.
+      const clear = this._aimClearZoom(c, gy);
+      t.zoom = clear > 0 ? clamp(clear, AIM_ZOOM_MIN, AIM_ZOOM) : AIM_ZOOM;
+      ({ halfH, halfW } = this.viewHalfExtents(t.zoom));
       // Push the shooter off-centre, against the frame edge it is firing away
       // from, so the aim frame is mostly the ground the shell has to cross.
       let x = c.shooter.x + dir * (0.5 - AIM_SHOOTER_X) * 2 * halfW;
@@ -275,6 +408,40 @@ export class World {
     t.y = Math.min(t.y, limit + (1 - w) * (VIEW_TOP - VIEW_BOTTOM));
   }
 
+  // Impact framing. The FX director owns the punch-in and drives the smoothed
+  // camera straight at the blast, so this re-frames the FINAL view rather than
+  // the follow target — otherwise the director's own convergence would simply
+  // undo it. Blends per FRAME (not per second) for the same reason the punch
+  // does: the blast frame has to be composed before the fireball peaks.
+  _frameImpact(v, dt) {
+    const im = this.compose && this.compose.impact;
+    if (im) {
+      const tanH = Math.tan((this.camera.fov * Math.PI) / 360);
+      const aspect = this.camera.aspect || 16 / 9;
+      const zoom = clamp(v.zoom * IMPACT_WIDEN, MIN_ZOOM, MAX_ZOOM);
+      const halfH = tanH * zoom, halfW = halfH * aspect;
+      // Blast off-centre AGAINST the shell's travel, so the ejecta cone and the
+      // ground it is thrown across have the room, and high in frame so the
+      // crater it just carved is in the same shot.
+      let x = im.x + (im.dir >= 0 ? 1 : -1) * IMPACT_LEAD * 2 * halfW;
+      // If a mobile lands near a frame edge, pull it fully in (or push it fully
+      // out): a blast sharing the frame with a character reads twice as big.
+      x = this._avoidActorClip(x, halfW, this.compose.actors);
+      const y = im.y - (0.5 - IMPACT_FRAME_Y) * 2 * halfH;
+      this._impF = { x, y, zoom };
+    }
+    const want = im ? 1 : 0;
+    this._impMix += (want - this._impMix) * clamp(dt * (want ? 21 : 7), 0, 1);
+    const f = this._impF;
+    if (!f || this._impMix < 0.004) return v;
+    const m = this._impMix;
+    return {
+      x: lerp(v.x, f.x, m),
+      y: lerp(v.y, f.y, m),
+      zoom: lerp(v.zoom, f.zoom, m),
+    };
+  }
+
   update(dt, shake = { x: 0, y: 0 }) {
     this._compose();
     this._clampView(this.target);
@@ -289,11 +456,11 @@ export class World {
     if (this.punchT > 0) this.punchT = Math.max(0, this.punchT - dt * 3.4);
     const pk = this.punchT * this.punchT;
 
-    const view = this._clampView({
+    const view = this._clampView(this._frameImpact({
       x: this.pos.x,
       y: this.pos.y,
       zoom: this.pos.zoom * (1 - pk * 0.085),
-    });
+    }, dt));
     this.camera.position.set(view.x + shake.x, view.y + shake.y, view.zoom);
     this.camera.lookAt(view.x + shake.x, view.y + shake.y, 0);
     this.composer.render();

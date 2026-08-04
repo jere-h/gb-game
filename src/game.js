@@ -40,6 +40,10 @@ const IMPACT_DWELL = 2.45;
 // tight lens) and ends before the next player can be lining up a shot.
 const TWO_SHOT_IN = 0.72;
 const TWO_SHOT_OUT = 3.3;
+// How long the composed blast framing holds after an impact. Matches the FX
+// director's own punch-in window, so the frame is re-composed for exactly as
+// long as the director is driving the camera at the crater.
+const IMPACT_FRAME_OUT = 0.6;
 const MARKER_Z = 70;         // marker plane, in front of every play-field prop
 // On-screen width of the off-screen rival chevron, sized against the viewport
 // so it stays a readable badge on desktop without eating a phone's screen.
@@ -78,6 +82,8 @@ export class Game {
     this._aimActiveT = 0;        // >0 while the player is actively lining up
     this._aimKey = null;
     this._sinceImpact = 1e6; // no impact yet: aim framing is free, no hand-over beat
+    this._impactPt = null;   // last crater: story point for the blast framing
+    this._landmarks = null;  // cached island boxes (see landmarks())
 
     // Open the match already lined up on the rival, the way a player would
     // leave the turret after their last shot.
@@ -242,6 +248,8 @@ export class Game {
     this.focus = { x: impact.x, y: Math.max(impact.y, 40) };
 
     if (impact.type === 'water') {
+      // No crater and no fireball: the blast framing stays out of it.
+      this._impactPt = null;
       this.audio.splash();
       if (this.effects.waterSplash) this.effects.waterSplash(impact.x, 18);
       else this.effects.spawn({ x: impact.x, y: 20, count: 14, speed: 180, color: '#9ad4ff', life: 0.6, size: 20 });
@@ -251,6 +259,10 @@ export class Game {
       this.resolveT = 0.9;
       return;
     }
+
+    // Story point for the blast framing: where it hit and which way the shell
+    // was travelling, so the frame can leave room for the ejecta.
+    this._impactPt = { x: impact.x, y: Math.max(impact.y, 40), dir: p.vx >= 0 ? 1 : -1 };
 
     // Impact juice: brief time freeze + camera zoom punch.
     this.hitstop = 0.085;
@@ -657,6 +669,48 @@ export class Game {
     return out;
   }
 
+  // Landmark boxes for the camera's framing guard: the floating island cluster
+  // in world space, measured off the terrain mask so it covers the companion
+  // rocks as well as the main island. The camera uses these to make sure the
+  // map's most characterful prop is either whole in frame or out of it, never
+  // sliced into a featureless brown underside by the top edge.
+  //
+  // Scanned once, from the mask rather than per-frame pixel reads: the region
+  // is the sky band above the ground, so it never touches the play field.
+  landmarks() {
+    if (this._landmarks) return this._landmarks;
+    this._landmarks = [];
+    const T = this.terrain;
+    const info = T && T.islandInfo;
+    if (!info || !T.mask) return this._landmarks;
+    const W = T.w, H = T.h;
+    const x0 = Math.max(0, Math.round(info.cx - info.rx - 320));
+    const x1 = Math.min(W - 1, Math.round(info.cx + info.rx + 320));
+    const y0 = Math.max(0, Math.round(info.cy - 60));
+    const y1 = Math.min(H - 1, Math.round(info.bottom + 40));
+    let lx = Infinity, hx = -Infinity, ly = Infinity, hy = -Infinity;
+    for (let y = y0; y <= y1; y++) {
+      const row = y * W;
+      for (let x = x0; x <= x1; x++) {
+        if (!T.mask[row + x]) continue;
+        if (x < lx) lx = x;
+        if (x > hx) hx = x;
+        if (y < ly) ly = y;
+        if (y > hy) hy = y;
+      }
+    }
+    if (!isFinite(lx)) return this._landmarks;
+    // Canvas -> world, padded for the art the mask does not carry: dangling
+    // roots below the belly, grass tufts and flowers on the cap.
+    this._landmarks = [{
+      x0: lx - W / 2 - 16,
+      x1: hx - W / 2 + 16,
+      y0: H - hy - 80,
+      y1: H - ly + 26,
+    }];
+    return this._landmarks;
+  }
+
   // Cast list for the camera's safe-area guard: every mobile still in the
   // match, with the half-width / height of the space its art actually needs.
   // The rig uses this to guarantee no mobile is ever sliced by a frame edge.
@@ -675,6 +729,14 @@ export class Game {
     if (!m) return null;
     const shooter = { x: m.x, groundY: m.y };
     const actors = this.actorBoxes();
+    const landmarks = this.landmarks();
+
+    // Blast frame. While the FX director is punching in on the impact the rig
+    // re-composes that push: the crater and (where it fits) a mobile share the
+    // frame, so the fireball has something to be big NEXT TO.
+    const impact = this._impactPt && this._sinceImpact < IMPACT_FRAME_OUT
+      ? this._impactPt
+      : null;
 
     // Turn hand-over beat. Once the impact punch-in has played out, the rig
     // widens to a two-shot that holds the crater AND both mobiles clear of the
@@ -685,17 +747,35 @@ export class Game {
       && this.state !== 'flying'
       && this._sinceImpact > TWO_SHOT_IN
       && this._sinceImpact < TWO_SHOT_OUT) {
-      return { mode: 'wide', shooter, actors, anchor: this.focus, settled: true };
+      return { mode: 'wide', shooter, actors, landmarks, anchor: this.focus, settled: true };
     }
 
     const aiming = (this.state === 'aim' || this.state === 'charging')
       && this._aimActiveT > 0
       && this._sinceImpact >= IMPACT_DWELL;
-    if (!aiming) return { mode: 'shot', shooter, actors, settled: this.state !== 'flying' };
+    if (!aiming) {
+      // Turn top, nobody touching the controls yet: this is the establishing
+      // beat — the frame a stranger judges the game on. Show the whole cast and
+      // the map's landmarks rather than a follow shot on one mobile.
+      const establishing = (this.state === 'aim' || this.state === 'charging')
+        && actors.length > 1
+        && !impact
+        && this._sinceImpact >= IMPACT_DWELL;
+      return {
+        mode: establishing ? 'establish' : 'shot',
+        shooter,
+        actors,
+        landmarks,
+        impact,
+        anchor: { x: m.x, y: m.y + 60 },
+        settled: this.state !== 'flying',
+      };
+    }
     return {
       mode: 'aim',
       shooter,
       actors,
+      landmarks,
       settled: true,
       facing: m.facing,
       edges: this.silhouetteEdges(),

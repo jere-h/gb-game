@@ -16,9 +16,26 @@
 //
 // Both share the same art rules: identical hull construction (one extruded
 // silhouette with a fat bevelled rim), identical eye rig (sclera + pupil +
-// glint + brow), one and only one element that reads as a gun (the rear
-// cylinder is deliberately styled as a sooty gunmetal exhaust), the same
-// outline weights, and the same contact shadow.
+// glint + tapered brow stroke), one and only one element that reads as a gun
+// (the rear cylinders are deliberately styled as sooty gunmetal exhausts, and
+// both mobiles carry a twin-stack cluster so they rhyme), one shared warm brass
+// accent on both muzzles, the same outline weights, and the same contact shadow.
+//
+// SURFACE CRAFT RULES (a bare toon-shaded ellipsoid is what a stranger reads as
+// "cheap 3D", so every hull has to be an assembly, not a moulding):
+//  - TWO hull materials minimum. Each mobile carries a second, lighter/less
+//    saturated plate (Boomer's belly, Raider's brow facet) plus a deep shade.
+//  - Scribed panel seams that FOLLOW the curvature (torus arcs squashed flat on
+//    the front cap), each with a jittered rivet row.
+//  - VALUE SEPARATION is load-bearing: barrel, running gear and outline must
+//    never share a value, or the whole top or bottom of the mobile collapses
+//    into one unreadable dark mass at game zoom.
+//  - NO uniform stamp arrays. Tread links, tyre lugs, sprocket teeth, fangs and
+//    rivets are all jittered from a per-mobile seeded RNG (deterministic, so
+//    the capture script still diffs frames cleanly).
+//  - Anything painted on the shell has to sit PROUD of the hull's front cap
+//    (z > faceZ) or its inverted-hull keyline is swallowed and it reads as a
+//    decal instead of a bolted-on part.
 //
 // Visual techniques:
 //  - Cel shading: MeshToonMaterial + a shared 4-step DataTexture gradient map.
@@ -34,7 +51,7 @@
 //    the local terrain slope for free.
 
 import * as THREE from 'three';
-import { clamp, rad } from './util.js';
+import { clamp, rad, makeRng } from './util.js';
 
 export const MOBILE_TYPES = {
   // Boomer is cyan-teal (NOT royal blue) so it separates from the blue sky
@@ -82,8 +99,8 @@ function radialTexture(stops) {
   return new THREE.CanvasTexture(c);
 }
 
-// Soft blob shadow: three stacked constant-opacity ellipse discs (wide+faint
-// under mid under a darker core). Constant-alpha untextured blending is the
+// Soft blob shadow: stacked constant-opacity ellipse discs (wide+faint under
+// mid under a darker core). Constant-alpha untextured blending is the
 // one transparency path that renders reliably everywhere, including the
 // software-GL fallback used for CI screenshots (which drops alpha-blended
 // draws that use texture alpha or vertex alpha).
@@ -188,6 +205,32 @@ function smoothNormals(geo, maxAngleDeg = 62) {
   return geo;
 }
 
+// Tapered ink stroke: fat at one end, thin at the other, rounded caps at both.
+// A brow drawn as a BoxGeometry is the single loudest "a programmer made this
+// face" tell on a cartoon character — hard 90-degree corners and a constant
+// weight read as machine art. This is the hand-drawn equivalent: one quadratic
+// per side, so the weight eases off along the length.
+const _strokeCache = new Map();
+function strokeGeo(len, t0, t1) {
+  const key = `${len}|${t0}|${t1}`;
+  let g = _strokeCache.get(key);
+  if (g) return g;
+  const s = new THREE.Shape();
+  s.moveTo(0, -t0);
+  s.quadraticCurveTo(len * 0.52, -t0 * 0.84, len, -t1);
+  s.quadraticCurveTo(len + t1 * 1.35, 0, len, t1);
+  s.quadraticCurveTo(len * 0.52, t0 * 0.84, 0, t0);
+  s.quadraticCurveTo(-t0 * 1.35, 0, 0, -t0);
+  g = new THREE.ExtrudeGeometry(s, {
+    depth: 2.6, bevelEnabled: true, bevelThickness: 0.9, bevelSize: 0.7,
+    bevelSegments: 1, curveSegments: 9,
+  });
+  g.translate(-len * 0.5, 0, -1.3);
+  smoothNormals(g);
+  _strokeCache.set(key, g);
+  return g;
+}
+
 // Extrude a shape into a centred, chunky slab. Returns the geometry; the flat
 // front cap ends up at z = faceZ(o), which is where every painted-on face
 // detail is anchored.
@@ -215,6 +258,10 @@ const HULL_HARD = { depth: 22, bevelThickness: 7, bevelSize: 4.5, bevelSegments:
 // Track slab: thinner, tighter rim.
 const TRACK = { depth: 10, bevelThickness: 6, bevelSize: 5, bevelSegments: 3, curveSegments: 10 };
 const TRACK_FACE = faceZ(TRACK);
+// Bolt-on armour plate: a thin slab that sits proud of the hull's front cap, so
+// the shell reads as an assembly of plates rather than one moulded blob.
+const PLATE = { depth: 3.2, bevelThickness: 2.0, bevelSize: 1.7, bevelSegments: 2, curveSegments: 8 };
+const PLATE_FACE = faceZ(PLATE);
 
 // Scratch vectors for the per-frame barrel screen-angle correction.
 const _bp0 = new THREE.Vector3();
@@ -332,17 +379,39 @@ export class Mobile {
     // out of the pupil's rim at game zoom.
     this.part(g, new THREE.SphereGeometry(glint, 9, 7), this.glintM,
       px + pr * pupilW * 0.42, py + pr * 0.44, z + 4.0);
-    const brow = this.part(g, new THREE.BoxGeometry(browW, browH, 3.2), browCol || pupil,
-      x + 0.4, y + browY, z + 1.2, { rz: browTilt });
+    // Tapered stroke, heavy at the forward (scowling) end: a rectangle brow is
+    // the loudest machine-art tell on a cartoon face.
+    const brow = this.part(g, strokeGeo(browW, browH * 0.60, browH * 0.22),
+      browCol || pupil, x + 0.4, y + browY, z + 1.2, { rz: browTilt, sx: -1 });
     this.outline(brow, 1.5);
     return sc;
+  }
+
+  // A panel seam that follows the hull's curvature, with an optional rivet row.
+  // Torus arc squashed flat in z so it lies on the front plate like a scribed
+  // line rather than a pipe glued to the shell.
+  seam(g, mat, cx, cy, z, r, a0, sweep, tube = 1.15, rivets = 0, rivMat = null, rivR = 1.4) {
+    const seg = clamp(Math.round(sweep * 12), 6, 28);
+    this.part(g, new THREE.TorusGeometry(r, tube, 4, seg, sweep), mat, cx, cy, z,
+      { rz: a0, sz: 0.3 });
+    if (!rivets || !rivMat) return;
+    const rg = new THREE.SphereGeometry(1, 8, 6);
+    for (let i = 0; i < rivets; i++) {
+      const a = a0 + sweep * ((i + 0.5) / rivets);
+      // Rivets on real hardware are on a regular pitch but never render
+      // identically: jitter radius and size so the row is not a stamp array.
+      const rr = r + this.rnd(-0.7, 0.7);
+      const s = rivR * this.rnd(0.82, 1.16);
+      this.part(g, rg, rivMat, cx + Math.cos(a) * rr, cy + Math.sin(a) * rr, z + 1.3,
+        { sx: s, sy: s, sz: s * 0.55 });
+    }
   }
 
   // Heavy tapered barrel shared by both chassis: breech, long tube, one warm
   // recoil collar, and a flared/braked muzzle with a black bore. This is the
   // ONLY element on either mobile allowed to read as a gun.
   // Returns the pivot-to-bore distance so muzzleState() stays exact.
-  buildCannon(px, py, { angular = false, tube, accent, lite, ink }) {
+  buildCannon(px, py, { angular = false, tube, accent, lite, dark, ink }) {
     this.pivotX = px;
     this.pivotY = py;
     this.barrelPivot = new THREE.Group();
@@ -355,20 +424,32 @@ export class Mobile {
 
     if (angular) {
       // Raider: boxy mantlet + hexagonal tube + slotted square muzzle brake.
+      // Value-separated top to bottom (light facet / mid tube / dark underside)
+      // so the gun never merges with the hull outline or the tread band.
       const mantlet = this.part(bg, new THREE.BoxGeometry(22, 26, 26), tube, 2, 0, 0, { rz: 0.12 });
-      this.outline(mantlet, 3.0);
+      this.outline(mantlet, 3.6);
+      // Trunnion bolts: the joint the gun actually pivots on, so the mantlet
+      // reads as a bridge between hull and barrel instead of a floating box.
+      for (const bz of [13.5, -13.5]) {
+        this.part(bg, new THREE.CylinderGeometry(5.2, 5.2, 3, 12), lite, 2, 0, bz,
+          { rx: Math.PI / 2 });
+      }
       const barrel = this.part(bg, new THREE.CylinderGeometry(9.6, 11.6, 44, 6), tube, 30, 0, 0,
         { rz: -Math.PI / 2, ry: 0.26 });
-      this.outline(barrel, 3.2);
+      this.outline(barrel, 3.6);
       const collar = this.part(bg, new THREE.BoxGeometry(7, 27, 27), accent, 17, 0, 0, { rz: 0.12 });
       this.outline(collar, 2.4);
       const brake = this.part(bg, new THREE.BoxGeometry(17, 29, 27), tube, 55, 0, 0);
-      this.outline(brake, 3.0);
+      this.outline(brake, 3.6);
       // Brake slots (two dark bites out of the block) + bright top facet.
       for (const sy of [8.5, -8.5]) {
         this.part(bg, new THREE.BoxGeometry(6, 6.5, 29), this.flat('#181d2a', false), 55, sy, 0);
       }
-      this.part(bg, new THREE.BoxGeometry(38, 3.4, 4), lite, 34, 9.4, 9);
+      this.part(bg, new THREE.BoxGeometry(38, 3.6, 4), lite, 34, 9.6, 9);
+      this.part(bg, new THREE.BoxGeometry(34, 3.0, 4), dark, 32, -9.8, 9);
+      // Warm muzzle band, matching the player's brass ring: the two mobiles
+      // read as one art kit, and the gun's business end pops off the dark hull.
+      this.part(bg, new THREE.BoxGeometry(4.4, 30, 28), accent, 47.5, 0, 0);
       this.part(bg, new THREE.CylinderGeometry(9.2, 9.2, 2, 16), bore, 64, 0, 0,
         { rz: -Math.PI / 2 });
       return 65;
@@ -377,19 +458,29 @@ export class Mobile {
     // Boomer: rounded breech + smooth tapered tube + brass-ringed bell muzzle.
     const breech = this.part(bg, new THREE.SphereGeometry(13.5, 18, 14), tube, 0, 0, 0,
       { sx: 1.05, sy: 1, sz: 0.95 });
-    this.outline(breech, 3.0);
+    this.outline(breech, 3.6);
     const barrel = this.part(bg, new THREE.CylinderGeometry(10.2, 12.2, 46, 22), tube, 26, 0, 0,
       { rz: -Math.PI / 2 });
-    this.outline(barrel, 3.2);
+    this.outline(barrel, 3.6);
+    // Underside shade facet: gives the tube a cel ramp instead of one flat value.
+    if (dark) {
+      this.part(bg, new THREE.CylinderGeometry(2.4, 2.4, 34, 8), dark, 28, -8.0, 3.0,
+        { rz: -Math.PI / 2 });
+    }
     const collar = this.part(bg, new THREE.CylinderGeometry(13.4, 13.4, 6.5, 22), accent, 24, 0, 0,
       { rz: -Math.PI / 2 });
     this.outline(collar, 2.4);
+    // Trunnion bosses on the collar: the visible gun/hull joint.
+    for (const bz of [11.5, -11.5]) {
+      this.part(bg, new THREE.CylinderGeometry(3.4, 3.4, 3, 12), lite, 24, 0, bz,
+        { rx: Math.PI / 2 });
+    }
     // Long low-contrast light catch: reads as a cylinder highlight, not a band.
     this.part(bg, new THREE.CylinderGeometry(2.0, 2.0, 30, 8), lite, 30, 7.6, 3.5,
       { rz: -Math.PI / 2 });
     const muzzle = this.part(bg, new THREE.CylinderGeometry(15.8, 10.4, 13, 22), lite, 54, 0, 0,
       { rz: -Math.PI / 2 });
-    this.outline(muzzle, 3.0);
+    this.outline(muzzle, 3.6);
     const mring = this.part(bg, new THREE.TorusGeometry(14.8, 2.9, 10, 26), accent, 60.5, 0, 0,
       { ry: Math.PI / 2 });
     this.outline(mring, 2.2);
@@ -402,21 +493,21 @@ export class Mobile {
   // with a soot ring and a black bore. Deliberately stripped of every barrel
   // cue (no warm band, no flare, no muzzle ring) so the silhouette carries
   // exactly one gun.
-  buildExhaust(g, x, y, len = 15, r0 = 5.6, r1 = 4.0, s = 1) {
+  buildExhaust(g, x, y, len = 15, r0 = 5.6, r1 = 4.0, s = 1, z = 4) {
     const soot = this.toon('#2b3040');
     const gunmetal = this.toon('#464f66');
     const bore = this.flat('#0b0e17', false);
     const ang = Math.PI / 2 + 0.52;              // back and 30 degrees down
     const dx = -Math.sin(ang), dy = Math.cos(ang);
     const pipe = this.part(g, new THREE.CylinderGeometry(r1 * s, r0 * s, len * s, 12), gunmetal,
-      x, y, 4, { rz: ang });
+      x, y, z, { rz: ang });
     this.outline(pipe, 2.2);
     const tx = x + dx * len * s * 0.5, ty = y + dy * len * s * 0.5;
     const ring = this.part(g, new THREE.CylinderGeometry(r1 * s * 1.35, r1 * s * 1.35, 3.4 * s, 12),
-      soot, tx, ty, 4, { rz: ang });
+      soot, tx, ty, z, { rz: ang });
     this.outline(ring, 1.8);
     this.part(g, new THREE.CylinderGeometry(r1 * s * 0.78, r1 * s * 0.78, 1.6, 12), bore,
-      tx + dx * 2.2, ty + dy * 2.2, 4, { rz: ang });
+      tx + dx * 2.2, ty + dy * 2.2, z, { rz: ang });
   }
 
   // --- model -----------------------------------------------------------------
@@ -429,7 +520,14 @@ export class Mobile {
     const isRaider = this.typeKey === 'raider';
     this.ink = isRaider ? '#25101a' : '#101a2e';
     this.glintM = new THREE.MeshBasicMaterial({ color: '#ffffff' });
-    this.sinkY = isRaider ? -3.5 : -2.5;
+    this.sinkY = isRaider ? -2.4 : -2.2;
+    // Seeded per spawn x, so every stamped repeat (tread links, tyre lugs,
+    // teeth, rivets) can be jittered and still be identical run to run — the
+    // capture script diffs frames, and a uniform stamp array is the fastest way
+    // to make hand-painted art look machine-generated.
+    const seed = (Math.round(Math.abs(this.x) * 13) + (isRaider ? 977 : 131)) >>> 0;
+    const rng = makeRng(seed || 7);
+    this.rnd = (a, b) => a + (b - a) * rng();
 
     this.bodyGroup = new THREE.Group();
     this.group.add(this.bodyGroup);
@@ -442,14 +540,29 @@ export class Mobile {
     // so the contact shadow survives the overview zoom instead of averaging
     // away to nothing.
     const shadow = new THREE.Group();
-    this.shadowW = isRaider ? 60 : 46;   // ~1.25x the track footprint half-width
-    this.shadowH = isRaider ? 16 : 14.5;
+    this.shadowW = isRaider ? 67 : 57;   // ~1.25x the hull half-width
+    this.shadowH = isRaider ? 15.5 : 14.5;
     this.shadowLayers = [];
-    // Five thin steps instead of three: the stack integrates to a smooth
-    // radial falloff (dense core, feathered rim) with no hard elliptical edge.
-    [[1.0, 0.11], [0.85, 0.12], [0.69, 0.13], [0.52, 0.15], [0.34, 0.16]].forEach(([s, a], i) => {
+    // Seven thin steps: the stack integrates to a smooth radial falloff (dense
+    // core ~0.55 alpha, feathered rim) with no hard elliptical edge. Each step
+    // carries its own offset, biased away from the sun (world.js puts it up and
+    // to the right) so the pool LEANS instead of sitting as a symmetric halo —
+    // and the last, widest-but-flattest step is a tight ambient-occlusion band
+    // hugging the running gear with no offset at all, which is what actually
+    // seats the machine in the sod.
+    //           [sx,    sy,   alpha,  offX,  offY]
+    const STEPS = [
+      [1.00, 1.00, 0.115, -0.15, -0.10],
+      [0.87, 0.93, 0.125, -0.11, -0.07],
+      [0.74, 0.85, 0.132, -0.08, -0.05],
+      [0.61, 0.75, 0.142, -0.05, -0.03],
+      [0.48, 0.63, 0.152, -0.03, -0.01],
+      [0.33, 0.50, 0.172, 0.00, 0.00],
+      [0.74, 0.33, 0.200, 0.00, 0.05],
+    ];
+    STEPS.forEach(([sx, sy, a, ox, oy], i) => {
       const mat = new THREE.MeshBasicMaterial({
-        color: '#0b1a1c', transparent: true, opacity: a, depthWrite: false,
+        color: '#150f20', transparent: true, opacity: a, depthWrite: false,
       });
       const layer = new THREE.Mesh(shadowCircle(), mat);
       layer.position.z = i * 0.25;
@@ -457,12 +570,11 @@ export class Mobile {
       // shadow must draw after it or the terrain repaints over it.
       layer.renderOrder = 6;
       shadow.add(layer);
-      this.shadowLayers.push({ mesh: layer, mat, s, a });
+      this.shadowLayers.push({ mesh: layer, mat, sx, sy, a, ox, oy, z: i * 0.25 });
     });
-    // Sunk BELOW the contact line (the chassis occludes everything above it)
-    // and nudged away from the sun so the pool that actually reaches the frame
-    // is a wide dark smudge on the sod rather than a hairline under the treads.
-    shadow.position.set(isRaider ? -4 : -5, -5.5, -12);
+    // Sits just under the contact line, not down on the dirt apron: the pool has
+    // to pool AROUND the running gear where the eye looks for it.
+    shadow.position.set(isRaider ? -3 : -4, -2.0, -12);
     this.group.add(shadow);
     this.shadow = shadow;
 
@@ -525,24 +637,31 @@ export class Mobile {
   // ==========================================================================
   buildBoomer() {
     const g = this.bodyGroup;
+    const R = this.rnd;
     this.faceZ = faceZ(HULL_ROUND);
     const cyan = this.toon(this.type.body);          // #3cc2ee shell
+    const cyanLite = this.toon('#7ed8f4');           // SECOND hull material
     const cyanDeep = this.toon('#1c7fb2');           // shaded lower plate
     const navy = this.toon(this.type.accent);        // #1d5f94
-    const navyDeep = this.toon('#123c63');           // brows / hatch
+    const navyDeep = this.toon('#123c63');           // axle / deep shade
+    const seamM = this.toon('#17699c');              // scribed panel seams
     const steel = this.toon('#9aa7bd');
-    const gun = this.toon('#39415c');
+    const steelDark = this.toon('#63718c');
+    const rivet = this.toon('#6d9cc2');              // mid tone: reads as metal,
+    const gun = this.toon('#39415c');                // not as white speckle
     const gunLite = this.toon('#616d92');
     const brass = this.toon('#f2a33a');              // the single warm accent
-    const tire = this.toon('#232a44');
+    const tire = this.toon('#333d5a');               // slate: 2 values off ink
+    const lugM = this.toon('#1f2740');
     // Sclera is off-white on purpose: pure white sits above the bloom pass's
     // luminance threshold and bleeds a halo over the pupil, greying it out.
     const sclera = this.flat('#dce8f4');
-    const white = this.flat('#ffffff');
+    const white = this.flat('#dde7ef');
     const inkM = this.flat('#0d1526');
     const browM = this.flat('#16385c');
     const gloss = this.flat('#a9e9ff');
     const bulb = this.flat('#ffd23f', false);
+    const soot = this.flat('#17203a');
 
     const CY = 45;   // hull centre height
     const FZ = this.faceZ;
@@ -554,69 +673,123 @@ export class Mobile {
 
     const wheelGeo = new THREE.CylinderGeometry(14.5, 14.5, 17, 26);
     const hubGeo = new THREE.CylinderGeometry(6.4, 6.4, 3.4, 16);
-    const lugGeo = new THREE.BoxGeometry(3.4, 4.4, 18);
+    const rimGeo = new THREE.TorusGeometry(12.6, 1.5, 5, 22);
+    const lugGeo = new THREE.BoxGeometry(1, 1, 18);
     const boltGeo = new THREE.SphereGeometry(1.8, 8, 6);
     for (const wx of [-20, 20]) {
       const wheel = this.part(g, wheelGeo, tire, wx, 14.5, 2, { rx: Math.PI / 2 });
       this.outline(wheel, 3.0);
-      // Tyre lugs around the rim: reads as rubber, and stops the two wheels
-      // merging into one dark bar under the hull.
-      for (let k = 0; k < 12; k++) {
-        const a = k * (Math.PI / 6);
-        this.part(g, lugGeo, navyDeep, wx + Math.cos(a) * 14.2, 14.5 + Math.sin(a) * 14.2, 2,
-          { rz: a });
+      // Tyre lugs around the rim. Pitch, length and thickness are all jittered:
+      // an exactly uniform ring of identical blocks is the tell that gave the
+      // old wheels their picket-fence read.
+      const n = 11;
+      for (let k = 0; k < n; k++) {
+        const a = k * ((Math.PI * 2) / n) + R(-0.075, 0.075) + (wx > 0 ? 0.28 : 0);
+        this.part(g, lugGeo, lugM, wx + Math.cos(a) * 14.1, 14.5 + Math.sin(a) * 14.1, 2,
+          { rz: a, sx: R(2.9, 4.1), sy: R(4.0, 5.6) });
       }
-      const hub = this.part(g, hubGeo, steel, wx, 14.5, 10.5, { rx: Math.PI / 2 });
+      // Bright machined rim ring + hub: lifts the running gear off the keyline
+      // so the lower third is no longer one silhouette-coloured mud shape. The
+      // torus already lies in XY — rotating it would stand it on edge.
+      this.part(g, rimGeo, steelDark, wx, 14.5, 10.2, { sz: 0.6 });
+      const hub = this.part(g, hubGeo, steel, wx, 14.5, 10.8, { rx: Math.PI / 2 });
       this.outline(hub, 1.8);
       for (let k = 0; k < 5; k++) {
         const a = k * (Math.PI * 2 / 5) + 0.4;
-        this.part(g, boltGeo, navy, wx + Math.cos(a) * 9.6, 14.5 + Math.sin(a) * 9.6, 11.8);
+        this.part(g, boltGeo, navy, wx + Math.cos(a) * 9.6, 14.5 + Math.sin(a) * 9.6, 12.1);
       }
     }
 
-    // --- hull: ONE continuous rounded silhouette ------------------------
+    // --- hull: one continuous rounded shell, but no longer a plain CIRCLE.
+    // The top deck is flattened and the rear shoulder squared off; the vented
+    // front side pod and the twin rear exhaust stacks below then push two more
+    // hard-surface bumps out of the outline.
     const hullGeo = slab(roundedShape([
-      [30, -4, 15], [24, 15, 15], [0, 22, 19], [-26, 11, 17],
-      [-30, -8, 13], [-22, -21, 8], [22, -21, 8],
+      [31, -6, 12], [27, 12, 13], [7, 24, 16], [-14, 23, 9],
+      [-29, 9, 13], [-31, -9, 11], [-22, -21, 8], [22, -21, 8],
     ]), HULL_ROUND);
     const hull = this.part(g, hullGeo, cyan, 0, CY, 0);
     this.outline(hull, 3.6);
 
-    // Cel shading painted on the front plate: a wide shaded belly band low
-    // down, a soft gloss streak up on the clean rear shoulder.
-    // The band runs wider than the flat plate on purpose: its ends spill onto
-    // the bevel so it reads as shading wrapping the volume, not a painted-on
-    // puddle floating in the middle of the body.
-    this.part(g, new THREE.SphereGeometry(1, 22, 12), cyanDeep, 1, CY - 20, FZ + 0.6,
-      { sx: 26, sy: 4.2, sz: 0.5 });
-    this.part(g, new THREE.SphereGeometry(1, 18, 12), gloss, -15, CY + 12, FZ + 1.0,
-      { sx: 8.8, sy: 4.0, sz: 0.5, rz: -0.5 });
+    // --- SURFACE: two hull materials, a scribed seam, a rivet row --------
+    // Belly plate in the second (lighter, less saturated) blue. Ends spill onto
+    // the bevel on purpose so it reads as a plate wrapping the volume, not a
+    // decal floating in the middle of the front cap.
+    this.part(g, new THREE.SphereGeometry(1, 22, 12), cyanLite, 3, CY - 14, FZ + 0.5,
+      { sx: 25, sy: 7.4, sz: 0.5 });
+    // Cast shadow under the belly plate's lower lip.
+    this.part(g, new THREE.SphereGeometry(1, 22, 12), cyanDeep, 1, CY - 21.5, FZ + 0.4,
+      { sx: 21, sy: 3.2, sz: 0.5 });
+    // Seam A: shallow arc scribed along the belly plate's top edge, 4 rivets.
+    this.seam(g, seamM, 4, CY - 42, FZ + 1.6, 30, 1.06, 1.02, 1.5, 4, rivet, 1.7);
+    // ONE gloss streak, on the clean rear shoulder, clear of every seam.
+    this.part(g, new THREE.SphereGeometry(1, 18, 12), gloss, -19, CY + 6, FZ + 1.0,
+      { sx: 7.4, sy: 3.2, sz: 0.5, rz: -0.62 });
+
+    // --- silhouette break 1: front side pod with a vent grill -----------
+    const POD = { depth: 11, bevelThickness: 4.0, bevelSize: 3.0, bevelSegments: 2, curveSegments: 7 };
+    const podGeo = slab(roundedShape([
+      [6, -10, 3], [8, 4, 3], [2, 9, 3], [-7, 7, 3], [-7, -9, 3],
+    ]), POD);
+    const pod = this.part(g, podGeo, navy, 34, CY - 6, 12);
+    this.outline(pod, 3.0);
+    const podZ = 12 + faceZ(POD) + 0.6;
+    for (let k = 0; k < 3; k++) {
+      this.part(g, new THREE.BoxGeometry(10, 1.8, 2), inkM, 34, CY - 11 + k * 4.4, podZ);
+    }
+    this.part(g, new THREE.BoxGeometry(11, 2.2, 2), steelDark, 34.5, CY + 0.4, podZ);
 
     // --- FACE, painted directly on the hull's front plate ---------------
     // No head sphere, no seam: a single silhouette stroke wraps everything.
     this.eye(g, -1, CY + 3, {
       w: 8.2, h: 8.6, sclera, pupil: inkM, pupilR: 5.0,
-      browCol: browM, browTilt: -0.16, browW: 13.5, browH: 4.2, browY: 9.8,
+      browCol: browM, browTilt: -0.16, browW: 13.5, browH: 4.6, browY: 9.8,
     });
     this.eye(g, 16, CY + 1, {
       w: 8.2, h: 8.6, sclera, pupil: inkM, pupilR: 5.0,
-      browCol: browM, browTilt: -0.32, browW: 13.5, browH: 4.2, browY: 9.8,
+      browCol: browM, browTilt: -0.34, browW: 13.5, browH: 4.6, browY: 9.8,
     });
-    // Open, confident grin: a filled half-disc with a tooth band along the top.
-    this.part(g, new THREE.CircleGeometry(9.0, 26, Math.PI, Math.PI), inkM, 8, CY - 8, FZ + 2.0);
-    this.part(g, new THREE.BoxGeometry(15.2, 2.6, 1), white, 8, CY - 9.2, FZ + 2.6);
+    // Open, confident grin. Explicit shapes, not a grey smear: a dark maw, a
+    // bright lip catching light along the upper edge, ONE chunky tooth hooked
+    // over it, and a tongue in the shadowed corner.
+    this.part(g, new THREE.CircleGeometry(10.2, 26, Math.PI, Math.PI), inkM, 8, CY - 7.0, FZ + 2.0);
+    this.part(g, new THREE.CircleGeometry(4.6, 18, Math.PI, Math.PI), this.flat('#8e3a4a'),
+      10.5, CY - 11.6, FZ + 2.3);
+    this.part(g, new THREE.BoxGeometry(20.4, 2.0, 1), cyanLite, 8, CY - 6.0, FZ + 2.6);
+    const tooth = this.part(g, slab(roundedShape([
+      [2.2, 0, 0.7], [2.2, -3.4, 1.0], [-2.2, -3.4, 1.0], [-2.2, 0, 0.7],
+    ]), PLATE), white, 1.6, CY - 7.2, FZ + 1.9);
+    this.outline(tooth, 1.1);
 
     // Antenna with a glowing bobble, off the rear shoulder.
     this.part(g, new THREE.CylinderGeometry(1.9, 1.9, 17, 8), steel, -25, CY + 30, 0, { rz: 0.30 });
     const bob = this.part(g, new THREE.SphereGeometry(3.8, 12, 9), bulb, -27.5, CY + 38.5, 0);
     this.outline(bob, 1.6);
 
-    // --- rear exhaust (NOT a second gun) --------------------------------
-    this.buildExhaust(g, -33, CY - 11, 17, 6.2, 4.4, 1);
+    // --- silhouette break 3: twin rear exhaust cluster ------------------
+    // Was a single unexplained grey nub poking out of the flank at mid height,
+    // which read as a clipping error. Now a mounted cluster: a bolted manifold
+    // plate on the shell, a soot smudge burnt into the paint around it, and two
+    // staggered lipped pipes — and it rhymes with the Raider's twin stacks.
+    this.part(g, new THREE.SphereGeometry(1, 16, 10), soot, -21, CY - 12, FZ + 0.5,
+      { sx: 7.0, sy: 4.4, sz: 0.5, rz: 0.34 });
+    const MOUNT = { depth: 8, bevelThickness: 3.0, bevelSize: 2.2, bevelSegments: 2, curveSegments: 7 };
+    this.part(g, slab(roundedShape([
+      [4, -9, 2.5], [4, 9, 2.5], [-4, 7, 2.5], [-4, -7, 2.5],
+    ]), MOUNT), navy, -28, CY - 8, FZ - 1.0, { rz: 0.18 });
+    for (const by of [-6, 6]) {
+      this.part(g, boltGeo, steelDark, -28 - by * 0.18, CY - 8 + by, FZ - 1.0 + faceZ(MOUNT) - 0.4,
+        { sx: 0.9, sy: 0.9, sz: 0.5 });
+    }
+    // Kept at mid-depth, NOT pushed forward: a part tucked under the hull's
+    // bevel needs its outline shell to stay behind the bevel surface or the
+    // shell stipples a dashed arc through the paint above it.
+    this.buildExhaust(g, -37, CY - 3, 16, 6.0, 4.3, 1, -2);
+    this.buildExhaust(g, -34, CY - 14, 13, 5.2, 3.7, 1, -2);
 
     // --- cannon ----------------------------------------------------------
     this.muzzleLen = this.buildCannon(-8, CY + 13, {
-      angular: false, tube: gun, accent: brass, lite: gunLite,
+      angular: false, tube: gun, accent: brass, lite: gunLite, dark: this.toon('#252b40'),
     });
   }
 
@@ -627,15 +800,25 @@ export class Mobile {
   // ==========================================================================
   buildRaider() {
     const g = this.bodyGroup;
+    const R = this.rnd;
     this.faceZ = faceZ(HULL_HARD);
     const red = this.toon(this.type.body);
     const redDark = this.toon(this.type.accent);
     const redDeep = this.toon('#7b2a20');
     const redLite = this.toon('#ff9078');
-    const gun = this.toon('#39404f');
-    const gunLite = this.toon('#5b6580');
-    const tread = this.toon('#191d2b');
-    const roller = this.toon('#39415c');
+    // The gun is deliberately a MID grey, not the hull's near-black ink: at game
+    // zoom the old build's barrel, mantlet, counterweight, tread band and
+    // outline were all the same navy, so the whole top-left of the mobile
+    // collapsed into one unreadable dark mass.
+    const gun = this.toon('#5c6373');
+    const gunLite = this.toon('#8b95a9');
+    const gunDark = this.toon('#3b4252');
+    const brass = this.toon('#f2a33a');              // shared warm accent
+    const tread = this.toon('#2e3750');              // 2 values off the ink
+    const treadDark = this.toon('#212940');
+    const roller = this.toon('#4e5a78');             // road wheels
+    const linkLite = this.toon('#5f6c8c');           // link highlights
+    const steelDrive = this.toon('#6f7c99');         // drive sprockets
     const steel = this.toon('#98a2b8');
     const amber = this.flat('#ffdf72');
     const slit = this.flat('#2b0a10');
@@ -651,8 +834,9 @@ export class Mobile {
     ]), TRACK);
     const track = this.part(g, trackGeo, tread, -2, 13.5, 4);
     this.outline(track, 2.8);
-    // Inner guide rail + road wheels + a bigger drive sprocket at the rear.
-    this.part(g, new THREE.BoxGeometry(70, 3.4, 3), roller, 0, 14.5, 4 + TRACK_FACE);
+    // Inner guide rail + road wheels + a bigger drive sprocket at each end, so
+    // the band visibly HAS ends instead of running off into the dark.
+    this.part(g, new THREE.BoxGeometry(70, 3.4, 3), treadDark, 0, 14.5, 4 + TRACK_FACE);
     const rollGeo = new THREE.CylinderGeometry(5.2, 5.2, 4, 14);
     const sprocketGeo = new THREE.CylinderGeometry(7.4, 7.4, 4, 16);
     for (const wx of [-25, -8.5, 8, 24.5]) {
@@ -661,15 +845,31 @@ export class Mobile {
       this.part(g, new THREE.SphereGeometry(1.6, 8, 6), steel, wx, 11, 6 + TRACK_FACE);
     }
     for (const [wx, s] of [[-37, 1], [37, 0.92]]) {
-      const w = this.part(g, sprocketGeo, roller, wx, 12, 4 + TRACK_FACE,
+      const w = this.part(g, sprocketGeo, steelDrive, wx, 12, 4 + TRACK_FACE,
         { rx: Math.PI / 2, sx: s, sz: s });
       this.outline(w, 1.8);
+      // Sprocket teeth: a driven wheel, and a clear light terminator on the band.
+      for (let k = 0; k < 7; k++) {
+        const a = k * ((Math.PI * 2) / 7) + 0.2;
+        this.part(g, new THREE.BoxGeometry(2.6, 2.8, 4), steelDrive,
+          wx + Math.cos(a) * 7.4 * s, 12 + Math.sin(a) * 7.4 * s, 4 + TRACK_FACE - 0.4,
+          { rz: a });
+      }
       this.part(g, new THREE.SphereGeometry(2.1, 9, 7), steel, wx, 12, 6 + TRACK_FACE);
     }
-    // Tread lugs along the ground run: short light bars, no outline, so at
-    // distance the band still collapses to one solid dark shape.
+    // Tread links along the ground run. Every link's width, height, vertical
+    // offset and highlight brightness is jittered off a seeded RNG — an
+    // identical rounded rect at a perfectly uniform pitch, each with the same
+    // bright dot in the same place, is a textbook stamp array and reads as
+    // machine art the instant you look at it.
+    const linkGeo = new THREE.BoxGeometry(1, 1, 2);
     for (let k = -4; k <= 4; k++) {
-      this.part(g, new THREE.BoxGeometry(3.4, 4.6, 2), roller, k * 8.6, 2.6, 4 + TRACK_FACE - 1);
+      const lx = k * 8.6 + R(-0.9, 0.9);
+      const ly = 2.6 + R(-1.1, 1.1);
+      this.part(g, linkGeo, treadDark, lx, ly, 4 + TRACK_FACE - 1.4,
+        { sx: R(5.6, 7.4), sy: R(5.0, 6.4), rz: R(-0.09, 0.09) });
+      this.part(g, linkGeo, k === 2 ? gunDark : linkLite, lx + R(-0.6, 0.6), ly + R(-0.4, 0.4),
+        4 + TRACK_FACE - 0.6, { sx: R(2.2, 3.2), sy: R(2.4, 3.4), rz: R(-0.12, 0.12) });
     }
 
     // --- hull: a hard-chamfered charging WEDGE --------------------------
@@ -690,39 +890,68 @@ export class Mobile {
     this.part(g, new THREE.BoxGeometry(26, 3.6, 2), redLite, 30, CY + 16, FZ + 0.6);
     // Shadow the eyes: a dark bar tucked under the horn's leading underside.
     this.part(g, new THREE.BoxGeometry(30, 5, 2), redDeep, 28, CY + 9, FZ + 0.6, { rz: -0.12 });
+    // Scribed panel seams + jittered rivet rows on the flank, so the big red
+    // slab is an assembly of plates rather than one bare toon ramp.
+    this.seam(g, redDeep, -6, CY - 30, FZ + 1.2, 34, 1.02, 0.72, 1.0, 4, steel, 1.4);
+    this.seam(g, redDeep, 2, CY + 46, FZ + 1.2, 40, 4.22, 0.58, 1.0, 0, null);
 
     // Riveted armour plate on the back deck (Raider's answer to Boomer's hatch)
-    this.part(g, new THREE.BoxGeometry(26, 8, 3), redDark, -26, CY - 2, FZ + 0.9, { rz: 0.16 });
-    for (const rx of [-36, -26, -16]) {
-      this.part(g, new THREE.SphereGeometry(1.7, 8, 6), steel, rx, CY - 2 + (rx + 26) * 0.16,
-        FZ + 3.0);
+    const deck = this.part(g, slab(roundedShape([
+      [13, -4.5, 2], [13, 4.5, 2], [-13, 4.5, 2], [-13, -4.5, 2],
+    ]), PLATE), redDark, -26, CY - 2, FZ - 1.4, { rz: 0.16 });
+    this.outline(deck, 1.8);
+    for (const rx of [-36, -29, -22, -16]) {
+      const s = R(0.8, 1.2);
+      this.part(g, new THREE.SphereGeometry(1.7, 8, 6), steel, rx + R(-0.6, 0.6),
+        CY - 2 + (rx + 26) * 0.16 + R(-0.5, 0.5), FZ + PLATE_FACE - 0.8,
+        { sx: s, sy: s, sz: s * 0.6 });
     }
 
-    // --- FACE: same rig as Boomer, hostile settings ---------------------
-    // Narrow slit eyes with vertical predator pupils, set deep under the horn.
-    this.eye(g, 20, CY + 4, {
-      w: 7.2, h: 4.3, sclera: amber, pupil: slit, pupilW: 0.42, pupilR: 3.3, glint: 1.5,
-      browCol: slit, browTilt: -0.42, browW: 13, browH: 3.6, browY: 5.6,
+    // --- FACE: same rig as Boomer, hostile settings, 1.55x bigger -------
+    // The old face was a 20px detail with eight ~3px teeth: at the zoom this
+    // game is actually played at it turned to grey mush, so the unit's one
+    // charm beat was invisible. Three shapes now — two slit eyes and one fanged
+    // maw — sized to still read when the mobile is downsampled to 48px.
+    this.eye(g, 17, CY + 5, {
+      w: 10.4, h: 6.4, sclera: amber, pupil: slit, pupilW: 0.44, pupilR: 4.9, glint: 2.0,
+      browCol: slit, browTilt: -0.42, browW: 17, browH: 4.8, browY: 7.8,
     });
-    this.eye(g, 34, CY - 0.5, {
-      w: 7.2, h: 4.3, sclera: amber, pupil: slit, pupilW: 0.42, pupilR: 3.3, glint: 1.5,
-      browCol: slit, browTilt: -0.56, browW: 13, browH: 3.6, browY: 5.6,
+    this.eye(g, 36, CY - 0.5, {
+      w: 10.4, h: 6.4, sclera: amber, pupil: slit, pupilW: 0.44, pupilR: 4.9, glint: 2.0,
+      browCol: slit, browTilt: -0.56, browW: 17, browH: 4.8, browY: 7.8,
     });
-    // Bared-fang grin: a dark maw band with interlocking teeth.
-    this.part(g, new THREE.BoxGeometry(34, 7.6, 2), maw, 24, CY - 10, FZ + 1.6, { rz: -0.20 });
-    const fangGeo = new THREE.ConeGeometry(2.5, 5.8, 4);
-    for (const fx of [9, 16, 23, 30, 37]) {
-      const fy = CY - 10 - (fx - 24) * 0.20 + 1.1;
-      this.part(g, fangGeo, fang, fx, fy, FZ + 2.4, { rz: Math.PI - 0.20, sz: 0.5 });
+    // Bared-fang grin: a dark maw band with THREE big interlocking top fangs
+    // and two bottom ones. Sizes and skews are jittered and one fang is chipped
+    // short — a row of identical triangles at machine pitch is the same stamp
+    // -array tell as the tread links.
+    this.part(g, new THREE.BoxGeometry(38, 9.6, 2), maw, 24, CY - 11, FZ + 1.6, { rz: -0.20 });
+    const fangGeo = new THREE.ConeGeometry(1, 1, 4);
+    const topF = [[10, 1.0], [21, 1.06], [32, 0.62], [41, 0.8]];
+    for (const [fx, k] of topF) {
+      const fy = CY - 11 - (fx - 24) * 0.20 + 1.4;
+      this.part(g, fangGeo, fang, fx, fy, FZ + 2.4,
+        { rz: Math.PI - 0.20 + R(-0.09, 0.09), sx: R(3.0, 3.7), sy: 9.2 * k, sz: 1.6 });
     }
-    for (const fx of [12.5, 19.5, 26.5, 33.5] ) {
-      const fy = CY - 10 - (fx - 24) * 0.20 - 1.1;
-      this.part(g, fangGeo, fang, fx, fy, FZ + 2.4, { rz: -0.20, sz: 0.5 });
+    for (const fx of [15.5, 26.5, 37]) {
+      const fy = CY - 11 - (fx - 24) * 0.20 - 1.6;
+      this.part(g, fangGeo, fang, fx, fy, FZ + 2.4,
+        { rz: -0.20 + R(-0.09, 0.09), sx: R(2.7, 3.4), sy: R(6.6, 8.4), sz: 1.6 });
     }
 
     // --- twin sooty exhaust stacks on the tail (clearly not guns) -------
-    const stackSoot = this.toon('#2b3040');
+    const stackSoot = this.toon('#39405a');
     const stackBore = this.flat('#0b0e17', false);
+    // A bolted manifold saddle first: the old stacks floated off the back deck
+    // with nothing physically connecting them to the hull, so they read as
+    // detached geometry.
+    const saddle = this.part(g, slab(roundedShape([
+      [12, -5, 2], [12, 5, 2], [-13, 6, 2], [-13, -4, 2],
+    ]), PLATE), gunDark, -35, CY + 11, 16, { rz: 0.08 });
+    this.outline(saddle, 2.2);
+    for (const bx of [-9, 8]) {
+      this.part(g, new THREE.SphereGeometry(1.6, 8, 6), steel, -35 + bx, CY + 11 + bx * 0.08,
+        16 + PLATE_FACE - 0.5, { sz: 0.6 });
+    }
     // Staggered in x as well as z: the billboarded side view collapses depth,
     // so two stacks at the same x would project onto each other as one.
     for (const [sx, z, h] of [[-41, 9, 22], [-31, -9, 18]]) {
@@ -740,7 +969,7 @@ export class Mobile {
 
     // --- cannon ----------------------------------------------------------
     this.muzzleLen = this.buildCannon(-14, CY + 10, {
-      angular: true, tube: gun, accent: redDark, lite: gunLite,
+      angular: true, tube: gun, accent: brass, lite: gunLite, dark: gunDark,
     });
   }
 
@@ -760,7 +989,7 @@ export class Mobile {
     const ox = (this.pivotX || 0) * this.facing;
     const oy = (this.pivotY !== undefined ? this.pivotY : (this.muzzleY || 30)) + (this.sinkY || 0);
     const px = this.x + (ox * cos - oy * sin) + rotated.x * L;
-    const py = this.y + (ox * sin + oy * cos) + rotated.y * L;
+    const py = this.y + (this.groundLift || 0) + (ox * sin + oy * cos) + rotated.y * L;
     return { x: px, y: py, dir: rotated };
   }
 
@@ -797,8 +1026,20 @@ export class Mobile {
   syncTransform() {
     // Chord across the whole track footprint (not the point derivative) so the
     // tread baseline follows the ground the mobile actually spans.
-    this.groundAngle = this.terrain.surfaceAngle(this.x, this.typeKey === 'raider' ? 30 : 22);
-    this.group.position.set(this.x, this.y, 20);
+    const halfSpan = this.typeKey === 'raider' ? 30 : 22;
+    this.groundAngle = this.terrain.surfaceAngle(this.x, halfSpan);
+    // Seat the tracks on the HIGHEST ground the chassis spans, not on the
+    // centre sample. The tilt is a chord across the footprint, so in a dip the
+    // chord's ends fall BELOW the real surface and the running gear buries
+    // itself while the hull still floats — the "sinking and pasted on at the
+    // same time" read. Lifting by the chord/centre mismatch puts both track
+    // ends exactly on the sod. Never pushes the mobile down (a crest should
+    // still let the belly kiss the ground).
+    const hL = this.terrain.surfaceY(this.x - halfSpan);
+    const hR = this.terrain.surfaceY(this.x + halfSpan);
+    this.groundLift = (hL >= 0 && hR >= 0)
+      ? clamp((hL + hR) / 2 - this.y, 0, 14) : 0;
+    this.group.position.set(this.x, this.y + this.groundLift, 20);
     this.group.rotation.z = this.groundAngle;
     this.group.scale.x = this.facing;
 
@@ -890,13 +1131,14 @@ export class Mobile {
     const layers = this.shadowLayers;
     if (!layers) return;
     const zk = clamp(camDist / 1240, 0.7, 1.6);
-    const ws = 0.62 + 0.40 * zk;   // 1.02 at aim zoom, ~1.26 at overview
-    const as = 0.55 + 0.48 * zk;   // 1.03 at aim zoom, ~1.32 at overview
+    const ws = 0.70 + 0.34 * zk;   // 1.04 at aim zoom, ~1.17 at overview
+    const as = 0.74 + 0.28 * zk;   // 1.02 at aim zoom, ~1.12 at overview
     const W = this.shadowW, H = this.shadowH;
     for (let i = 0; i < layers.length; i++) {
       const L = layers[i];
-      L.mesh.scale.set(W * L.s * ws, H * L.s * ws, 1);
-      L.mat.opacity = L.a * as;
+      L.mesh.scale.set(W * L.sx * ws, H * L.sy * ws, 1);
+      L.mesh.position.set(W * L.ox, H * L.oy, L.z);
+      L.mat.opacity = clamp(L.a * as, 0, 1);
     }
   }
 

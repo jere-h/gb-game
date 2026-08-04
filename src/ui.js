@@ -96,53 +96,79 @@ function paintPortrait(canvas, typeKey, type, px) {
 }
 
 // Paint a hand-drawn item sprite into a console slot canvas.
-// kinds: 'dual' (twin gold shells), 'teleport' (blue swirl).
+// kinds: 'dual' (twin shells), 'teleport' (swirl portal).
+// The canvas is left TRANSPARENT: the slot tile's own bevelled navy gradient
+// is the ground, so icon and button are one material instead of a flat decal
+// pasted over a bevelled frame.
 function paintItem(canvas, kind, px = 40) {
   const s = px * 2;
   canvas.width = s; canvas.height = s;
   canvas.style.width = `${px}px`; canvas.style.height = `${px}px`;
   const g = canvas.getContext('2d');
   const u = s / 40;
+  g.clearRect(0, 0, s, s);
   g.lineJoin = g.lineCap = 'round';
-  // Flat navy field: at 44px only silhouette survives, so the ground stays
-  // plain and the glyph carries all the contrast.
-  const bg = g.createLinearGradient(0, 0, 0, s);
-  bg.addColorStop(0, '#182252'); bg.addColorStop(1, '#0a0f26');
-  g.fillStyle = bg; g.fillRect(0, 0, s, s);
+  const gold = () => {
+    const lg = g.createLinearGradient(0, 8 * u, 0, 32 * u);
+    lg.addColorStop(0, '#ffe9a8'); lg.addColorStop(0.55, '#ffd257');
+    lg.addColorStop(1, '#d89320');
+    return lg;
+  };
   if (kind === 'dual') {
-    // dual shot: two bold gold chevrons, dark-outlined
-    const chev = (ox) => {
-      g.beginPath();
-      g.moveTo((ox - 5) * u, 11 * u);
-      g.lineTo((ox + 5) * u, 20 * u);
-      g.lineTo((ox - 5) * u, 29 * u);
-      g.stroke();
-    };
-    g.strokeStyle = '#0a0f22'; g.lineWidth = 8.4 * u;
-    chev(14); chev(24);
-    g.strokeStyle = '#ffd75e'; g.lineWidth = 4.4 * u;
-    chev(14); chev(24);
-  } else {
-    // teleport: one bold circular arrow, drawn with the SAME hand as the dual
-    // chevrons — dark under-stroke then the coloured stroke, no solid fill, so
-    // the two adjacent slot tiles read as one illustration kit.
-    const ang = 1.9;
-    const head = (lw, col) => {
+    // DUAL SHOT: two actual shells, nose-up, the rear one offset behind —
+    // an object you can name, not an abstract ">>" chevron pair.
+    const shell = (cx, cy, sc) => {
       g.save();
-      g.translate(20 * u + Math.cos(ang) * 11 * u, 21 * u + Math.sin(ang) * 11 * u);
-      g.rotate(ang + Math.PI / 2);
-      g.strokeStyle = col; g.lineWidth = lw * u;
+      g.translate(cx * u, cy * u);
+      g.rotate(-0.42);
+      g.scale(sc, sc);
       g.beginPath();
-      g.moveTo(-4.6 * u, -5.4 * u); g.lineTo(6.6 * u, 0); g.lineTo(-4.6 * u, 5.4 * u);
-      g.stroke();
+      g.moveTo(0, -11 * u);                       // nose
+      g.quadraticCurveTo(5.2 * u, -6 * u, 5.2 * u, 0);
+      g.lineTo(5.2 * u, 7.4 * u);
+      g.lineTo(-5.2 * u, 7.4 * u);
+      g.lineTo(-5.2 * u, 0);
+      g.quadraticCurveTo(-5.2 * u, -6 * u, 0, -11 * u);
+      g.closePath();
+      g.strokeStyle = '#0a0f22'; g.lineWidth = 3.4 * u; g.stroke();
+      g.fillStyle = gold(); g.fill();
+      // driving band + tail fin, so the silhouette reads as ordnance
+      g.fillStyle = 'rgba(10,15,34,0.75)';
+      g.fillRect(-5.2 * u, 1.2 * u, 10.4 * u, 2 * u);
+      g.fillStyle = 'rgba(255,255,255,0.55)';
+      g.beginPath(); g.ellipse(-2.4 * u, -4 * u, 1.2 * u, 3.4 * u, 0.15, 0, Math.PI * 2);
+      g.fill();
       g.restore();
     };
-    const arc = (lw, col) => {
+    shell(25, 22, 0.86);   // rear shell, tucked behind
+    shell(16, 20, 1.0);    // front shell
+  } else {
+    // TELEPORT: a swirling portal — concentric spiral funnel, house gold, with
+    // ONE cyan spark at the mouth as the only cool accent.
+    const spiral = (lw, col) => {
       g.strokeStyle = col; g.lineWidth = lw * u;
-      g.beginPath(); g.arc(20 * u, 21 * u, 11 * u, -2.5, 1.9); g.stroke();
+      g.beginPath();
+      for (let i = 0; i <= 44; i++) {
+        const t = i / 44;
+        const a = -1.1 + t * Math.PI * 2.35;
+        const r = (14.5 - t * 11.5) * u;
+        const x = 20 * u + Math.cos(a) * r;
+        const y = 21 * u + Math.sin(a) * r * 0.82;
+        if (i === 0) g.moveTo(x, y); else g.lineTo(x, y);
+      }
+      g.stroke();
     };
-    arc(8.4, '#0a0f22'); head(8.4, '#0a0f22');
-    arc(4.6, '#8fe0ff'); head(4.6, '#8fe0ff');
+    // portal rim
+    g.strokeStyle = '#0a0f22'; g.lineWidth = 7.6 * u;
+    g.beginPath(); g.ellipse(20 * u, 21 * u, 14.5 * u, 12 * u, 0, 0, Math.PI * 2); g.stroke();
+    g.strokeStyle = gold(); g.lineWidth = 4 * u;
+    g.beginPath(); g.ellipse(20 * u, 21 * u, 14.5 * u, 12 * u, 0, 0, Math.PI * 2); g.stroke();
+    spiral(6.8, '#0a0f22');
+    spiral(3.4, '#ffd257');
+    // the single cyan accent: a spark at the throat
+    g.fillStyle = '#8fe0ff';
+    g.beginPath(); g.arc(20 * u, 21 * u, 2.6 * u, 0, Math.PI * 2); g.fill();
+    g.strokeStyle = '#0a0f22'; g.lineWidth = 1.6 * u; g.stroke();
   }
 }
 
@@ -157,7 +183,24 @@ export class UI {
           --navy-hi: #3b4d8f; --navy: #222d58; --navy-lo: #131a38;
           --gold: #ffd75e; --gold-hi: #fff3b8; --gold-lo: #b97f1d;
           --green: #46e065; --red: #ff5b4d;
+          --hud-gutter: 14px;
           font-family: 'Baloo 2', 'Trebuchet MS', 'Segoe UI', Verdana, sans-serif;
+        }
+        /* Legibility scrims: the HUD's contrast must not depend on what the
+           procedural map paints behind it. Two non-interactive vignettes sit
+           BEHIND every HUD element (z-index:-1 inside #hud's own stacking
+           context) so gold rims always have separation, on any future map. */
+        #hud::before, #hud::after {
+          content: ''; position: absolute; left: 0; right: 0;
+          pointer-events: none; z-index: -1;
+        }
+        #hud::before {
+          top: 0; height: 130px;
+          background: linear-gradient(rgba(10,16,40,0.32), rgba(10,16,40,0.11) 52%, rgba(10,16,40,0));
+        }
+        #hud::after {
+          bottom: 0; height: 150px;
+          background: linear-gradient(to top, rgba(8,12,32,0.46), rgba(8,12,32,0.16) 58%, rgba(8,12,32,0));
         }
         #hud .goldTrim {
           border: 2px solid #e8b64a;
@@ -170,7 +213,7 @@ export class UI {
 
         /* ============ wind compass ============ */
         #hud .windWrap {
-          position: absolute; top: 14px; left: 50%; transform: translateX(-50%);
+          position: absolute; top: var(--hud-gutter); left: 50%; transform: translateX(-50%);
           filter: drop-shadow(0 4px 10px rgba(0,0,10,0.55));
         }
         /* Horizontal pill (dial + readout) sized to the same height band as the
@@ -178,7 +221,9 @@ export class UI {
            square sticker hanging down over the map art. */
         #hud .windPlate {
           display: flex; align-items: center; gap: 9px;
-          padding: 5px 15px 5px 6px; border-radius: 38px;
+          /* height locked to the HP card's 65px so the three top-band elements
+             share ONE optical centre line, not just a top edge */
+          height: 65px; padding: 0 15px 0 6px; border-radius: 38px;
           background: linear-gradient(180deg, #3b4d8f 0%, #232e5c 38%, #131a38 100%);
           border: 2px solid #e8b64a;
           box-shadow:
@@ -187,15 +232,17 @@ export class UI {
             inset 0 -6px 10px rgba(0,0,0,0.4),
             0 4px 12px rgba(0,0,0,0.55);
         }
+        /* Crisp dial face: the old multi-stop radial blurred into a purplish
+           blob at 10 o'clock. One clean lit-from-upper-left sphere + a hard
+           inset ring so the ticks read as engraved marks. */
         #hud .wind {
-          position: relative; width: 56px; height: 56px; border-radius: 50%;
-          background:
-            radial-gradient(circle at 50% 34%, #46599c 0%, #2a3668 44%, #161d3d 80%, #0c1128 100%);
+          position: relative; width: 51px; height: 51px; border-radius: 50%; flex: 0 0 51px;
+          background: radial-gradient(circle at 40% 32%, #3b4a85 0%, #26305f 52%, #171e42 100%);
           border: 2px solid #e8b64a;
           box-shadow:
             0 0 0 1px #6b4a12,
-            inset 0 6px 10px rgba(0,0,0,0.55),
-            inset 0 -3px 8px rgba(90,120,220,0.22),
+            inset 0 0 0 1px rgba(8,12,32,0.9),
+            inset 0 5px 9px rgba(0,0,0,0.5),
             0 3px 8px rgba(0,0,0,0.5);
         }
         #hud .windSvg {
@@ -208,9 +255,12 @@ export class UI {
         }
         /* static L / R axis letters, pinned to exact 9 and 3 o'clock and painted
            in the HUD's own gold so they read as labels, not smudges */
+        /* L / R are ENGRAVED axis markers on the rim, not floating labels in
+           the arrow's path: pushed to the very edge and cooled so a long
+           needle can sweep past them without colliding. */
         #hud .windSvg .wax {
-          font: 800 18px 'Baloo 2','Trebuchet MS',sans-serif;
-          fill: #ffe7a0; opacity: 0.78;
+          font: 800 15px 'Baloo 2','Trebuchet MS',sans-serif;
+          fill: #cfd9f5; opacity: 0.62;
           paint-order: stroke; stroke: #0b1026; stroke-width: 3.5px;
           stroke-linejoin: round;
         }
@@ -230,8 +280,8 @@ export class UI {
         /* soft offset gloss (no hard split) */
         #hud .wind .gloss {
           position: absolute; inset: 0; border-radius: 50%; pointer-events: none;
-          background: radial-gradient(circle at 32% 24%,
-            rgba(255,255,255,0.34), rgba(255,255,255,0.07) 36%, rgba(255,255,255,0) 60%);
+          background: radial-gradient(circle at 34% 22%,
+            rgba(255,255,255,0.22), rgba(255,255,255,0.04) 30%, rgba(255,255,255,0) 52%);
         }
         /* Readout lives OUTSIDE the dial: nothing overlaps the needle, so the
            arrow is one unbroken shape and the number is twice as readable. */
@@ -239,30 +289,47 @@ export class UI {
           display: flex; flex-direction: column; align-items: center; gap: 0;
         }
         #hud .windLabel {
-          font-size: 9px; font-weight: 800; letter-spacing: 2px;
+          font-size: 10px; font-weight: 800; letter-spacing: 0.14em;
           color: rgba(255,231,160,0.95); text-shadow: 0 1px 2px #000;
         }
+        /* The number IS the shot-deciding datum: it gets the FIRE button's gold
+           gradient and a dark outline so it outranks the other gold glyphs. */
         #hud .windBadge {
           font-family: 'Baloo 2', 'Trebuchet MS', sans-serif;
-          font-size: 27px; font-weight: 800; line-height: 1.05; color: var(--gold);
-          text-shadow: 0 2px 0 rgba(0,0,0,0.75), 0 0 8px rgba(0,0,0,0.5);
+          font-size: 30px; font-weight: 800; line-height: 1; color: var(--gold);
+          background: linear-gradient(180deg, #fff6d0 0%, #ffd75e 52%, #e8a01f 100%);
+          -webkit-background-clip: text; background-clip: text;
+          color: transparent; -webkit-text-fill-color: transparent;
+          filter:
+            drop-shadow(1px 0 0 #14193a) drop-shadow(-1px 0 0 #14193a)
+            drop-shadow(0 1px 0 #14193a) drop-shadow(0 -1px 0 #14193a)
+            drop-shadow(0 2px 2px rgba(0,0,10,0.75));
+        }
+        #hud .windRead .wunit {
+          font-size: 8px; font-weight: 800; letter-spacing: 0.08em;
+          color: #9fb0dd; text-shadow: 0 1px 1px #000; margin-top: -1px;
         }
 
         /* ============ bottom dock (one welded unit) ============ */
         /* wings + console share ONE border, ONE background and ONE baseline:
            no step, no gutters, no scene leaking between panels. */
+        /* One gutter for the whole chrome layer (HP cards, wind pill and dock
+           all sit on --hud-gutter). The base of the slab never falls below
+           ~RGB(30,38,80): the label row used to sit in a near-black void, which
+           is what made the empty power trough read as a hole in the bar. */
         #hud .dock {
-          position: absolute; left: 12px; right: 12px; bottom: 8px;
+          position: absolute; left: var(--hud-gutter); right: var(--hud-gutter);
+          bottom: var(--hud-gutter);
           display: flex; align-items: stretch; justify-content: center; gap: 0;
           border-radius: 16px;
           background:
-            linear-gradient(180deg, #4a5da6 0%, #2c3a6b 18%, #1d2750 60%, #131a38 100%);
+            linear-gradient(180deg, #4a5da6 0%, #35437c 20%, #2a3568 58%, #1e2650 100%);
           border: 2px solid #e8b64a;
           box-shadow:
             0 0 0 2px #6b4a12,
-            inset 0 2px 0 rgba(255,255,255,0.35),
-            inset 0 14px 22px rgba(120,150,255,0.12),
-            inset 0 -8px 14px rgba(0,0,0,0.45),
+            inset 0 2px 0 rgba(255,255,255,0.28),
+            inset 0 14px 22px rgba(120,150,255,0.10),
+            inset 0 -2px 0 #0d1024,
             0 6px 22px rgba(0,0,0,0.6);
           transition: opacity 0.35s;
         }
@@ -277,47 +344,76 @@ export class UI {
            width goes to the control that benefits from it — the power trough. */
         #hud .console {
           position: relative; flex: 1 1 auto; min-width: 0;
-          padding: 9px 20px 11px;
+          padding: 8px 20px 9px;
+        }
+        /* Whose numbers are these? A 2px team rail along the console's top
+           edge: house blue while you are up, warning red on the rival's turn.
+           Removes the ambiguity of a bar that mixes both players' data. */
+        #hud .console::before {
+          content: ''; position: absolute; left: 0; right: 0; top: 0; height: 2px;
+          border-radius: 2px; pointer-events: none;
+          background: linear-gradient(90deg,
+            rgba(89,193,255,0) 0%, #59c1ff 22%, #59c1ff 78%, rgba(89,193,255,0) 100%);
+          opacity: 0.85; transition: background 0.3s;
+        }
+        #hud .dock.waiting .console::before {
+          background: linear-gradient(90deg,
+            rgba(255,91,77,0) 0%, #ff5b4d 22%, #ff5b4d 78%, rgba(255,91,77,0) 100%);
         }
         /* rival-turn hand-off: the console visibly stands down. Per-control
            desaturation carries the state; a blanket alpha just looked unloaded. */
-        #hud .dock.waiting { opacity: 0.94; }
-        /* grayscale, not saturate(): dropping saturation on gold lands on khaki,
-           which is the one hue that must never appear next to this navy. */
+        /* NO opacity here. An opacity < 1 makes the dock a stacking context,
+           which demotes the FIRE button's z-index:40 to a local value — and on
+           the touch layout the fixed .powerRing (z-index 39, a DOM sibling
+           AFTER the dock) then painted straight over the WAIT dome, splitting
+           it into a dark half and a pale half. Per-control desaturation carries
+           the stand-down state on its own. */
+        #hud .dock.waiting { opacity: 1; }
+        /* The palette has NO neutral grey, so grayscale() was inventing one:
+           the selected shot chip turned a warm putty that became the brightest
+           thing in the corner. Dropping saturation instead lands gold on a
+           muted BRONZE — still legibly "selected", but receding. */
         #hud .dock.waiting .slot,
-        #hud .dock.waiting .shotBtn.on { filter: grayscale(0.88) brightness(0.62); }
+        #hud .dock.waiting .shotSel { filter: saturate(0.34) brightness(0.55); }
         #hud .dock.waiting .angle { color: #6f7fa8; text-shadow: none; }
-        #hud .dock.waiting .anglePrev { opacity: 0.3; }
-        #hud .dock.waiting .seg.ghost { opacity: 0; }
-        #hud .dock.waiting .powerLast.show { opacity: 0; }
+        /* The last shot's memory SURVIVES the hand-off (it only stands down
+           with the rest of the bar): erasing it left a 590px black slot in the
+           middle of the console for the whole of the rival's turn. */
+        #hud .dock.waiting .powerWrap { filter: saturate(0.6) brightness(0.86); }
         #hud .dock.waiting .idFrame, #hud .dock.waiting .lsv,
-        #hud .dock.waiting .wNum { filter: grayscale(0.8) brightness(0.7); }
+        #hud .dock.waiting .roundInline { filter: saturate(0.5) brightness(0.72); }
         /* ONE disabled look for the primary action, whether the shell is in the
            air or the rival is up: cool navy, never brown, and it keeps the gold
            ring, the inner bevel and the specular so it reads as a moulded
            button standing down — not as a dead bulb. */
         #hud .dock.waiting .fireBtn,
         #hud .dock.firing .fireBtn {
-          background: radial-gradient(circle at 50% 30%, #3a4472 0%, #232b4e 55%, #151a34 100%);
+          /* lifted well clear of the console slab: the old dome value was
+             within a few points of the bar behind it, so only the gold ring
+             survived and the control read as a HOLE punched in the bar */
+          background: radial-gradient(circle at 38% 28%, #4a5892 0%, #36407a 45%, #232c58 100%);
           border-color: #0a0f22;
-          box-shadow: 0 0 0 3px #b9954a, 0 0 0 5px #4c3a10,
-            inset 0 2px 0 rgba(255,255,255,0.22),
-            inset 0 -3px 0 rgba(0,0,0,0.7),
-            inset 0 -9px 14px rgba(0,0,0,0.5),
-            0 4px 10px rgba(0,0,0,0.5);
-          opacity: 0.88;
+          box-shadow: 0 0 0 3px #c9a558, 0 0 0 5px #4c3a10,
+            inset 0 2px 0 rgba(255,255,255,0.24),
+            inset 0 -3px 0 rgba(0,0,0,0.55),
+            inset 0 -9px 14px rgba(0,0,0,0.35),
+            0 4px 0 rgba(0,0,0,0.45), 0 8px 14px rgba(0,0,0,0.4);
+          opacity: 1;
         }
+        /* Same typeface, same weight, same slot for EVERY state of this button:
+           FIRE / WAIT / IN AIR were previously set in two different faces. */
         #hud .dock.waiting .fireBtn .fLabel,
         #hud .dock.firing .fireBtn .fLabel {
-          font-size: 13px; letter-spacing: 1.4px;
-          -webkit-text-fill-color: #8ea0cf; color: #8ea0cf;
-          filter: drop-shadow(0 1px 2px rgba(0,0,0,0.9));
+          font-size: 17px; letter-spacing: 0.6px;
+          background: none; -webkit-background-clip: border-box; background-clip: border-box;
+          -webkit-text-fill-color: #c8d2f5; color: #c8d2f5;
+          filter: drop-shadow(0 1px 0 rgba(0,0,0,0.75)) drop-shadow(0 2px 3px rgba(0,0,0,0.6));
         }
         #hud .dock.waiting .fireBtn::before,
         #hud .dock.firing .fireBtn::before { opacity: 0.3; }
         /* shell in the air: three pulsing gold dots so it reads BUSY, not dead */
         #hud .fireBtn .fDots {
-          position: absolute; left: 0; right: 0; bottom: 19px;
+          position: absolute; left: 0; right: 0; bottom: 14px;
           display: none; justify-content: center; gap: 5px;
         }
         #hud .dock.firing .fireBtn .fDots { display: flex; }
@@ -332,7 +428,7 @@ export class UI {
           45% { opacity: 1; transform: scale(1.15); } }
         /* dark navy shelf under the dock (no orphan gold hairline) */
         #hud .baseboard {
-          position: absolute; left: 0; right: 0; bottom: 0; height: 10px;
+          position: absolute; left: 0; right: 0; bottom: 0; height: 16px;
           background: linear-gradient(180deg, #1a2350 0%, #0e1430 100%);
           box-shadow: inset 0 1px 0 rgba(160,190,255,0.14), 0 -4px 14px rgba(0,0,10,0.35);
         }
@@ -377,10 +473,12 @@ export class UI {
           box-shadow: inset 0 1px 0 rgba(255,255,255,0.7), 0 0 8px rgba(255,215,94,0.45),
             0 2px 0 rgba(0,0,0,0.55);
         }
-        /* turn-order queue: portrait chips in play order, active one ringed */
-        #hud .orderQ { display: flex; gap: 6px; }
+        /* turn-order queue: portrait chips in play order, active one ringed.
+           34px (was 30 with an 18px face): at the old scale the Boomer was a
+           teal smudge and the Raider a red one — no silhouette survived. */
+        #hud .orderQ { display: flex; align-items: center; gap: 3px; }
         #hud .oChip {
-          position: relative; width: 30px; height: 30px; border-radius: 7px;
+          position: relative; width: 34px; height: 34px; border-radius: 8px;
           overflow: hidden; line-height: 0; background: #0e1430;
           border: 2px solid #4c3a10;
           box-shadow: inset 0 2px 5px rgba(0,0,0,0.75);
@@ -391,6 +489,21 @@ export class UI {
           border-color: #e8b64a; filter: none;
           box-shadow: 0 0 0 1px #6b4a12, 0 0 10px rgba(255,215,94,0.55),
             inset 0 1px 0 rgba(255,255,255,0.3);
+        }
+        /* ordinal badge: turns two portraits into an actual QUEUE */
+        #hud .oChip .oNum {
+          position: absolute; left: 0; bottom: 0; z-index: 2;
+          min-width: 11px; padding: 0 1px; border-radius: 0 4px 0 4px;
+          background: rgba(8,12,32,0.85);
+          font-size: 8px; font-weight: 800; line-height: 10px; text-align: center;
+          color: #ffe7a0; font-style: normal;
+        }
+        #hud .oChip.act .oNum { background: #e8b64a; color: #2a1c02; }
+        /* "this one, THEN this one" */
+        #hud .orderQ .oArrow {
+          width: 9px; text-align: center; line-height: 1;
+          color: rgba(255,215,94,0.7); font-size: 11px; font-weight: 800;
+          text-shadow: 0 1px 2px #000;
         }
         /* LAST SHOT readout (right wing): actually actionable, unlike a log */
         #hud .lastShot { display: flex; gap: 5px; }
@@ -403,7 +516,29 @@ export class UI {
           color: #ffe7a0; font-size: 14px; font-weight: 800; text-shadow: 0 1px 2px #000;
           transition: filter 0.3s;
         }
+        /* No shot yet? Then LAST SHOT is a dimmed GHOST, not two bordered chips
+           each holding an em-dash — a bordered-but-empty field is the visual
+           signature of a broken data binding, and it sat in the establishing
+           frame. The chrome drops away entirely until there is real data. */
+        #hud .wStat.pend .lsv {
+          background: none; border-color: transparent; box-shadow: none;
+          opacity: 0.34; color: #9fb0dd; text-shadow: 0 1px 2px #000;
+        }
+        #hud .wStat.pend .miniLabel { opacity: 0.45; }
         #hud .lsv.empty { color: rgba(140,170,255,0.32); }
+        /* ROUND reads inline, like a scoreboard line, instead of one lonely
+           20px glyph over a caption in a full column */
+        #hud .roundInline {
+          display: flex; align-items: baseline; gap: 5px;
+          font-size: 11px; font-weight: 800; letter-spacing: 0.18em;
+          color: #ffe7a0; text-shadow: 0 1px 2px #000; white-space: nowrap;
+          transition: filter 0.3s;
+        }
+        #hud .roundInline b {
+          font-family: 'Baloo 2', 'Trebuchet MS', sans-serif;
+          font-size: 19px; letter-spacing: 0; color: var(--gold);
+          text-shadow: 0 2px 0 rgba(0,0,0,0.7), 0 0 8px rgba(0,0,0,0.5);
+        }
         /* One shared bottom rail: every column's caption lands on one baseline. */
         #hud .row { display: flex; align-items: flex-end; gap: 14px; }
         #hud .row > .col {
@@ -414,6 +549,17 @@ export class UI {
           height: 12px; line-height: 12px;
           font-size: 10px; font-weight: 800; letter-spacing: 2.5px;
           color: #ffe7a0; text-shadow: 0 1px 2px #000; white-space: nowrap;
+        }
+        /* The FIRE column was the ONE column with no caption, leaving a 90px
+           hole in an otherwise unbroken label rail — on the widest, most
+           prominent control. Its caption doubles as the keybind hint. */
+        #hud .fireKey {
+          height: 12px; line-height: 11px; padding: 0 6px;
+          border-radius: 4px; letter-spacing: 1.6px; font-size: 9px;
+          background: linear-gradient(#3b4a80, #1c2549 60%, #141b3d);
+          border: 1px solid #0a0f22;
+          box-shadow: inset 0 1px 0 rgba(255,255,255,0.24), 0 1px 0 rgba(0,0,0,0.5);
+          color: #c3cfef;
         }
 
         /* --- player identity (portrait + name) --- */
@@ -459,13 +605,10 @@ export class UI {
         }
         /* previous shot lives INSIDE the screen as a ghost, so the caption stays
            the word ANGLE and the live value stays the hero */
-        #hud .anglePrev {
-          font-size: 11px; font-weight: 800; letter-spacing: 1px;
-          color: #7f8cb5; text-shadow: none;
-          opacity: 0; transition: opacity 0.3s; white-space: nowrap;
-        }
-        #hud .anglePrev.show { opacity: 1; }
-        #hud .anglePrev i { color: var(--gold); font-style: normal; padding-right: 2px; }
+        /* Retired: an unlabelled 30%-contrast "· 54°" next to the live reading
+           was unguessable, and it duplicated the LAST SHOT chip 1000px away.
+           Kept in the DOM (the setter is public surface) but never painted. */
+        #hud .anglePrev { display: none; }
 
         /* --- segmented power gauge --- */
         #hud .powerBox { flex: 1 1 auto; min-width: 0; align-self: flex-end; }
@@ -490,11 +633,14 @@ export class UI {
             0 1px 0 rgba(255,255,255,0.2),
             0 0 14px rgba(255,140,0,0.75), 0 0 26px rgba(255,110,0,0.35);
         }
-        /* the empty trough reads as a lit chamber, not as graph paper */
+        /* FLAT, deep, unlit empty track. The old trough carried its own
+           left-to-right gloss, which brightened the far end of the EMPTY
+           section back up to the value of the START of the fill — so the fill
+           edge, the one thing this control exists to show, was unresolvable. */
         #hud .powerClip {
           position: absolute; inset: 3px; border-radius: 6px; overflow: hidden;
-          background: linear-gradient(#1b2450, #101838 62%, #17244c);
-          box-shadow: inset 0 1px 0 rgba(255,255,255,0.10);
+          background: #10162e;
+          box-shadow: inset 0 3px 6px rgba(0,0,0,0.6);
         }
         /* resting identity: a warm charge-mouth at the left end so the empty
            trough reads as a chamber waiting to fill, not as a ruler */
@@ -506,7 +652,7 @@ export class UI {
         #hud .segRow { display: flex; gap: 1px; height: 100%; }
         #hud .seg {
           flex: 1; border-radius: 2px;
-          background: linear-gradient(rgba(120,150,255,0.09), rgba(8,14,36,0.22));
+          background: rgba(120,150,255,0.055);
           transform: skewX(-12deg);
           transition: background 0.05s;
           position: relative;
@@ -514,9 +660,12 @@ export class UI {
         /* previous shot: an explicitly COLD slate-blue memory. Desaturating the
            hot ramp produced a khaki-mud slab that fought the navy console and
            could be misread as a half charge. */
+        /* Loud enough to LOCATE: the old ghost sat 19 luminance points above
+           the empty track on dark navy, i.e. below the threshold at which a
+           player can find the fill edge at all. */
         #hud .seg.ghost {
-          background: linear-gradient(rgba(126,158,255,0.34), rgba(58,80,166,0.20));
-          box-shadow: inset 0 1px 0 rgba(190,215,255,0.20);
+          background: linear-gradient(#8fa9ff, #4b62c8 55%, #2b3a90);
+          box-shadow: inset 0 1px 0 rgba(220,232,255,0.55);
           filter: none;
           transition: opacity 0.3s;
         }
@@ -545,23 +694,24 @@ export class UI {
         }
         #hud .powerEdge.on { opacity: 1; animation: edgePulse 0.32s ease-in-out infinite alternate; }
         @keyframes edgePulse { from { filter: brightness(1); } to { filter: brightness(1.7); } }
+        /* a 5px rim highlight, NOT a 42%-tall wash: the wash was half the
+           reason the empty end of the track matched the lit end */
         #hud .powerWrap .sheen {
-          position: absolute; left: 3px; right: 3px; top: 3px; height: 42%;
-          background: linear-gradient(rgba(255,255,255,0.30), rgba(255,255,255,0.02));
-          border-radius: 6px 6px 0 0; pointer-events: none;
+          position: absolute; left: 4px; right: 4px; top: 3px; height: 5px;
+          background: linear-gradient(rgba(255,255,255,0.22), rgba(255,255,255,0));
+          border-radius: 5px 5px 0 0; pointer-events: none;
         }
         /* touch affordance: says out loud that power is a hold-and-release.
            Opaque cream on a hard black shadow (~8:1), and above the tick layer
            so a gold reference tick can never strike through a letter. */
         #hud .powerHint {
-          position: absolute; inset: 0; z-index: 3; display: none;
+          position: absolute; inset: 0; z-index: 3; display: flex;
           align-items: center; justify-content: center;
-          font-size: 10px; font-weight: 800; letter-spacing: 0.13em;
+          font-size: 11px; font-weight: 800; letter-spacing: 0.16em;
           color: #ffe9b0; text-shadow: 0 1px 2px #000, 0 0 6px rgba(0,0,10,0.95);
           pointer-events: none; animation: hintPulse 1.5s ease-in-out infinite;
         }
         @keyframes hintPulse { 50% { opacity: 0.55; } }
-        #hud.touch .powerHint { display: flex; }
         /* charging swaps the caption for the live value, in the same slot */
         #hud .powerNum {
           position: absolute; inset: 0; z-index: 3; display: none;
@@ -571,8 +721,20 @@ export class UI {
           color: #fff6d0; text-shadow: 0 2px 0 rgba(90,25,4,0.9), 0 0 10px rgba(0,0,10,0.9);
           pointer-events: none;
         }
-        #hud .powerWrap.charging .powerNum { display: flex; }
+        /* Once a shot exists, the trough always carries its value: the bar is
+           never again a blank slot. Live figure while charging, last-committed
+           figure (cool, quieter) the rest of the time. */
+        #hud .powerWrap.charging .powerNum,
+        #hud .powerWrap.hasLast .powerNum { display: flex; }
+        /* parked at the trough's right end so the numeral never straddles the
+           fill edge it is describing */
+        #hud .powerWrap.hasLast:not(.charging) .powerNum {
+          justify-content: flex-end; padding-right: 13px;
+          font-size: 13px; letter-spacing: 0.12em; color: #b9c9f2;
+          text-shadow: 0 1px 2px #000, 0 0 6px rgba(0,0,10,0.9); opacity: 0.92;
+        }
         #hud .powerWrap.charging .powerHint,
+        #hud .powerWrap.hasLast .powerHint,
         #hud .dock.waiting .powerHint,
         #hud .dock.fired .powerHint { display: none; }
         /* slow idle shimmer so the empty gauge reads as powered-on, not dead */
@@ -606,15 +768,18 @@ export class UI {
         /* --- item slots (authentic console silhouette) --- */
         #hud .slots { display: flex; gap: 8px; }
         #hud .slotWrap { position: relative; line-height: 0; }
+        /* Same filled-and-bevelled recipe as the SHOT keycaps: the console used
+           to run three unrelated button idioms (filled chip / flat outlined
+           square / dome) side by side in one 1576px bar. */
         #hud .slot {
           position: relative; width: 44px; height: 44px; border-radius: 8px;
-          background: linear-gradient(#0a0f26, #131b40 70%, #182252);
+          background: linear-gradient(#2e3a70, #232c5c 55%, #1a2247);
           border: 2px solid #e8b64a;
           box-shadow: 0 0 0 1px #6b4a12,
-            inset 1px 1px 0 rgba(0,0,10,0.75),
-            inset -1px -1px 0 rgba(140,170,255,0.28),
-            inset 0 3px 6px rgba(0,0,0,0.7),
-            0 2px 5px rgba(0,0,0,0.5);
+            inset 0 1px 0 rgba(255,255,255,0.20),
+            inset 0 -6px 10px rgba(0,0,0,0.35),
+            0 2px 0 rgba(0,0,0,0.55),
+            0 3px 7px rgba(0,0,0,0.45);
           overflow: hidden; line-height: 0;
           transition: filter 0.3s;
         }
@@ -624,15 +789,15 @@ export class UI {
           transform: rotate(-24deg);
           background: linear-gradient(rgba(255,255,255,0.16), rgba(255,255,255,0.01));
         }
-        /* keycap plate overhangs the TOP corner: at the bottom it bottomed out
-           4px above the shared caption rail and crowded the ITEMS column */
+        /* The keycap sits INSIDE the tile's lower-right corner. Overhanging the
+           top corner made it cross the button's own gold border and left a
+           visible seam on both slots. */
         #hud .slotKey {
-          position: absolute; right: -3px; top: -3px; z-index: 2;
-          padding: 1px 4px; border-radius: 4px; line-height: 1;
-          background: linear-gradient(#ffe9a0, #d59b1f);
-          color: #402c05; font-size: 8px; font-weight: 800; letter-spacing: 0.5px;
-          box-shadow: 0 0 0 1.5px #0a0f22, inset 0 1px 0 rgba(255,255,255,0.6),
-            0 1px 2px rgba(0,0,0,0.7);
+          position: absolute; right: 3px; bottom: 3px; z-index: 2;
+          padding: 0 3px; border-radius: 3px; line-height: 11px;
+          background: rgba(8,12,32,0.82);
+          color: #ffe7a0; font-size: 8px; font-weight: 800; letter-spacing: 0.5px;
+          box-shadow: inset 0 1px 0 rgba(255,215,94,0.35);
         }
 
         /* --- circular timer: a band wide enough to actually read --- */
@@ -643,10 +808,21 @@ export class UI {
             inset 0 1px 0 rgba(255,255,255,0.4);
           display: flex; align-items: center; justify-content: center;
         }
+        /* The depleted arc used to be a navy within a few points of the console
+           slab, so the arc boundary was unresolvable until the timer was
+           already low. This inset shade sinks the spent track into a real
+           groove and kills the aliased edge on the inner disc. */
+        #hud .timerRing::after {
+          content: ''; position: absolute; inset: 0; border-radius: 50%;
+          pointer-events: none;
+          box-shadow: inset 0 0 6px rgba(0,0,0,0.75), inset 0 0 0 1px rgba(8,12,32,0.7);
+        }
         #hud .timerFace {
+          position: relative; z-index: 1;
           width: 40px; height: 40px; border-radius: 50%;
           background: radial-gradient(circle at 50% 35%, #2c3a6b, #10162f 80%);
-          box-shadow: 0 0 0 2px #0a0f22, inset 0 3px 7px rgba(0,0,0,0.8);
+          box-shadow: 0 0 0 2px #0a0f22, 0 0 0 3px rgba(140,170,255,0.14),
+            inset 0 3px 7px rgba(0,0,0,0.8);
           display: flex; align-items: center; justify-content: center;
         }
         #hud .timer {
@@ -661,8 +837,8 @@ export class UI {
         /* --- FIRE: the only warm-red object in the HUD, and the biggest --- */
         #hud .fireBtn {
           position: relative; overflow: hidden;
-          width: 74px; height: 74px; border-radius: 50%; flex: 0 0 74px;
-          margin: 0 4px 2px;
+          width: 70px; height: 70px; border-radius: 50%; flex: 0 0 70px;
+          margin: 0 4px 0;
           display: flex; align-items: center; justify-content: center;
           background: radial-gradient(circle at 50% 26%,
             #ffe0b4 0%, #ffb877 16%, #ff8f42 36%, #f25c26 64%, #b52c10 100%);
@@ -672,7 +848,7 @@ export class UI {
             inset 0 -3px 0 rgba(120,25,5,0.9),
             inset 0 -10px 16px rgba(120,30,5,0.5),
             inset 0 9px 12px rgba(255,255,255,0.24),
-            0 6px 16px rgba(0,0,0,0.6);
+            0 4px 0 rgba(0,0,0,0.45), 0 8px 14px rgba(0,0,0,0.4);
           font-weight: 800; letter-spacing: 0.6px;
           transition: filter 0.25s;
         }
@@ -690,12 +866,14 @@ export class UI {
             drop-shadow(0 1px 0 #5a1608) drop-shadow(0 -1px 0 #5a1608)
             drop-shadow(0 2px 2px rgba(70,14,2,0.75));
         }
-        #hud .fireBtn::before { /* specular gloss ellipse across the top third */
-          content: ''; position: absolute; left: 12%; right: 12%; top: 5%; height: 38%;
-          border-radius: 50% 50% 46% 46%;
-          background: linear-gradient(rgba(255,255,255,0.7) 0%,
-            rgba(255,255,255,0.3) 45%, rgba(255,255,255,0.02) 100%);
-          pointer-events: none;
+        /* Specular gloss: a radial falloff, not a clipped linear ramp. The old
+           version terminated on a hard ellipse edge at ~40% height and left a
+           visible banding seam straight across the dome. */
+        #hud .fireBtn::before {
+          content: ''; position: absolute; inset: 0; pointer-events: none;
+          background: radial-gradient(ellipse 60% 34% at 50% 22%,
+            rgba(255,255,255,0.62) 0%, rgba(255,255,255,0.24) 45%,
+            rgba(255,255,255,0.04) 72%, rgba(255,255,255,0) 100%);
         }
         #hud .fireBtn:active, #hud .fireBtn.held {
           background: radial-gradient(circle at 50% 42%,
@@ -710,8 +888,9 @@ export class UI {
         }
 
         /* ============ player cards ============ */
-        #hud .players { position: absolute; top: 14px; width: 300px; }
-        #hud .players.left { left: 16px; } #hud .players.right { right: 16px; }
+        #hud .players { position: absolute; top: var(--hud-gutter); width: 300px; }
+        #hud .players.left { left: var(--hud-gutter); }
+        #hud .players.right { right: var(--hud-gutter); }
         #hud .pcard {
           position: relative; margin-bottom: 10px; padding: 7px 10px 8px;
           border-radius: 12px;
@@ -757,16 +936,16 @@ export class UI {
           animation: cardPulse 1.7s ease-in-out infinite;
         }
         @keyframes cardPulse { 50% { opacity: 0.7; } }
-        /* Off-turn card: solid and premium, only its energy drops. Alpha over
-           a bright sky bled through and muddied the gold trim. */
+        /* Off-turn card: NOT dimmed. Enemy HP is the number you most need to
+           read in an artillery duel, and the old treatment darkened the rim
+           30%, muted the panel and — worst — desaturated the HP fill itself,
+           so a healthy rival's bar shifted from vivid green to chalky sage and
+           could be misread as a status effect. Turn ownership is now signalled
+           ADDITIVELY (the active card gets a glow ring); the idle card just
+           loses that glow. */
         #hud .pcard.idle {
-          background: linear-gradient(180deg, #2a3563 0%, #1b2348 30%, #121838 100%);
-          border-color: #a4823a;
-          box-shadow: 0 0 0 2px #4c3a10, inset 0 1px 0 rgba(255,255,255,0.16),
-            inset 0 -6px 10px rgba(0,0,0,0.45), 0 5px 14px rgba(0,0,0,0.55);
+          background: linear-gradient(180deg, #35468a 0%, #1f2954 30%, #141c3e 100%);
         }
-        #hud .pcard.idle .hpfill { filter: saturate(0.55) brightness(0.9); }
-        #hud .pcard.idle .pname { color: #c6d0ea; }
         #hud .pcard.dead { opacity: 0.62; filter: saturate(0.25) brightness(0.8); }
         #hud .pRow { display: flex; align-items: center; gap: 9px; }
         #hud .players.right .pRow { flex-direction: row-reverse; }
@@ -778,17 +957,25 @@ export class UI {
           background: #27356d; line-height: 0;
         }
         #hud .pMain { flex: 1; min-width: 0; }
-        #hud .pTop { display: flex; align-items: center; gap: 8px; }
+        /* Baseline-aligned, and down to TWO type colours: the card used to run
+           white name + gold HP + pale-blue max + an unexplained gem glyph in
+           300x65px. Name and /max now share one cool grey; only the live HP is
+           gold. The gem is replaced by the mobile's NAME — information the
+           player can act on, tinted in that mobile's own colour so it still
+           carries the team read. */
+        #hud .pTop { display: flex; align-items: baseline; gap: 7px; }
         #hud .players.right .pTop { flex-direction: row-reverse; }
-        /* faceted team gem: 4 conic facets + specular dot */
-        #hud .avatar {
-          width: 15px; height: 15px; flex: 0 0 15px; transform: rotate(45deg);
-          border-radius: 3px; border: 1.5px solid #141224;
-          box-shadow: 0 0 0 1px rgba(255,232,154,0.6), 0 1px 3px rgba(0,0,0,0.6);
-          margin: 2px 3px;
+        #hud .avatar { display: none; }
+        #hud .pmob {
+          flex: 0 0 auto; padding: 1px 5px 2px; border-radius: 5px;
+          font-size: 9px; font-weight: 800; letter-spacing: 0.12em;
+          line-height: 1.2; white-space: nowrap;
+          background: rgba(8,12,32,0.55);
+          box-shadow: inset 0 0 0 1px rgba(255,255,255,0.10);
+          text-shadow: 0 1px 2px #000;
         }
         #hud .pname {
-          flex: 1; font-size: 16px; font-weight: 800; color: #fff; letter-spacing: 0.4px;
+          flex: 1; font-size: 16px; font-weight: 800; color: #d7e0f8; letter-spacing: 0.4px;
           line-height: 1.2;
           text-shadow: 0 2px 0 rgba(0,0,0,0.75), 0 0 8px rgba(0,0,0,0.5);
           white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -796,10 +983,13 @@ export class UI {
         #hud .players.right .pname { text-align: right; }
         #hud .hpnum {
           display: flex; align-items: baseline; gap: 2px;
-          font-size: 14px; font-weight: 800; color: var(--gold); line-height: 1.2;
+          font-size: 15px; font-weight: 800; color: var(--gold); line-height: 1.2;
           text-shadow: 0 1px 0 #000, 0 0 6px rgba(0,0,0,0.7);
         }
-        #hud .hpmax { font-size: 10px; font-weight: 800; color: #8fa6dd; text-shadow: 0 1px 0 #000; }
+        #hud .hpmax {
+          font-size: 10px; font-weight: 800; color: #d7e0f8; opacity: 0.7;
+          text-shadow: 0 1px 0 #000;
+        }
         /* A real trough with real weight: the most important readout in an
            artillery game was a 10px sliver inside a 68px card. */
         #hud .hpbar {
@@ -866,26 +1056,25 @@ export class UI {
         #hud .banner.sideL { justify-items: start; padding-left: 7%; }
         #hud .banner.sideR { justify-items: end; padding-right: 7%; }
         #hud .banner.show { opacity: 1; }
-        /* Tight halo hugging the plaque (it used to haze the whole island). */
-        #hud .banner .bGlow {
-          grid-area: 1 / 1; align-self: center;
-          width: 560px; height: 190px; pointer-events: none;
-          background: radial-gradient(ellipse 40% 46% at 50% 50%,
-            rgba(4,8,24,0.40) 0%, rgba(4,8,24,0.24) 42%,
-            rgba(4,8,24,0.09) 66%, rgba(4,8,24,0) 82%);
-        }
-        #hud .banner.show .bGlow { animation: glowIn 0.4s ease-out both; }
-        @keyframes glowIn { from { opacity: 0; } to { opacity: 1; } }
+        /* RETIRED. This was a fixed 560x190 ellipse living in the same grid
+           cell as the plaque — but the banner justifies its items to the START
+           edge on your turn, so the glow stuck out ~200px past the plaque and
+           painted a soft grey-blue SMUDGE across clean sky. The separation it
+           was buying is now done by the plaque's own drop-shadow, which follows
+           the clip-path exactly and cannot bleed. */
+        #hud .banner .bGlow { display: none; }
         /* Dark keyline plate behind the plaque: the house 2px gold + 2px brown
            trim, achieved with a slightly larger clip-path parent. */
         #hud .banner .bEdge {
           grid-area: 1 / 1; padding: 3px; background: #6b4a12;
           clip-path: polygon(0% 50%, 29px 0%, calc(100% - 29px) 0%, 100% 50%,
             calc(100% - 29px) 100%, 29px 100%);
-          /* the plaque is an OBJECT in front of the world, not a decal: it casts
-             onto sky, grass rim and cliff alike */
-          filter: drop-shadow(0 9px 15px rgba(0,0,20,0.62))
-                  drop-shadow(0 2px 3px rgba(0,0,20,0.5));
+          /* the plaque is an OBJECT in front of the world, not a decal: a hard
+             offset edge plus one tight blur, both shaped to the plaque, so it
+             separates from a floating island without hazing the sky */
+          filter: drop-shadow(0 4px 0 rgba(6,10,26,0.72))
+                  drop-shadow(0 6px 12px rgba(0,0,20,0.55))
+                  drop-shadow(0 0 14px rgba(4,8,24,0.55));
         }
         /* padding-right +12 balances the wordmark against the right chamfer */
         #hud .banner .bPlaque {
@@ -898,26 +1087,19 @@ export class UI {
           box-shadow: inset 0 2px 0 rgba(255,244,200,0.9),
             inset 0 -3px 0 rgba(90,58,10,0.92);
         }
-        /* ---- rival variant: a different STATE deserves a different colour ---- */
-        #hud .banner.rival .bEdge { background: #7a3010; }
-        #hud .banner.rival .bPlaque {
-          background: linear-gradient(180deg, #ffc79a 0%, #e07a4a 42%, #7a3010 100%);
-          box-shadow: inset 0 2px 0 rgba(255,222,196,0.9),
-            inset 0 -3px 0 rgba(86,30,8,0.92);
-        }
+        /* ---- rival variant ----------------------------------------------
+           ONLY the body fill changes. The old rival plaque swapped the gold rim
+           for orange and the gold wordmark for peach, so the enemy state looked
+           like it came from a different UI kit — and read visibly softer than
+           the player's. Gold trim + gold type is the house identity; the deep
+           maroon body is what says "not you". */
         #hud .banner.rival .bPlaque::before {
           background:
             linear-gradient(180deg, rgba(255,255,255,0.20) 0%,
               rgba(255,255,255,0.07) 26%, rgba(255,255,255,0) 46%),
-            linear-gradient(180deg, rgba(122,36,54,0.97) 0%,
-              rgba(74,18,32,0.97) 46%, rgba(42,10,18,0.97) 100%);
+            linear-gradient(180deg, rgba(122,34,48,0.97) 0%,
+              rgba(88,20,30,0.97) 46%, rgba(62,15,24,0.97) 100%);
         }
-        #hud .banner.rival .bFill {
-          background: linear-gradient(180deg, #fff2e0 0%, #ffd9a0 34%,
-            #ff9a5a 62%, #e8622a 82%, #ffb07a 100%);
-          -webkit-background-clip: text; background-clip: text; color: transparent;
-        }
-        #hud .banner.rival .bStroke { -webkit-text-stroke-color: #2a0a12; color: #2a0a12; }
         #hud .banner .bPlaque::before { /* navy face inset inside the gold edge */
           content: ''; position: absolute; inset: 4px;
           background:
@@ -972,28 +1154,39 @@ export class UI {
           background: linear-gradient(180deg, #ffe9b0 0%, #ff9d4d 35%, #ff5b4d 60%, #d92312 100%);
           -webkit-background-clip: text; background-clip: text; color: transparent;
         }
-        /* MISS / SPLASH: an acknowledgement, not a hit — but it is GUARANTEED
-           by construction to land on the brightest pixels in the frame, so it
-           gets a cream face, a fat near-black outline and a dark halo instead
-           of the old blue-grey that dissolved into the fireball's white core. */
-        #hud .dmg.callout > span { font-size: 34px; letter-spacing: 2px; }
+        /* MISS / SPLASH: the sole feedback for a shot's outcome, and by
+           construction it lands on the brightest pixels in the frame. Cream
+           type with a thin outline over pale fire smoke was the same hue family
+           and near-identical luminance — the left stem of the M dissolved.
+           It also had no plaque and no gold rim, the only HUD element in the
+           game without them, so it read as an asset from another product.
+           It now wears the house chrome: navy plaque, gold rim, WHITE type. */
+        #hud .dmg.callout {
+          padding: 4px 26px 8px; border-radius: 9px;
+          background: linear-gradient(180deg, #3a4a8c 0%, #2a3568 42%, #141b3c 100%);
+          border: 2px solid #e8b64a;
+          box-shadow: 0 0 0 2px #6b4a12,
+            inset 0 2px 0 rgba(255,255,255,0.28),
+            inset 0 -6px 12px rgba(0,0,0,0.4),
+            0 4px 0 rgba(0,0,0,0.5), 0 8px 22px rgba(0,0,0,0.55);
+        }
+        #hud .dmg.callout > span { font-size: 44px; letter-spacing: 3px; line-height: 1.12; }
         #hud .dmg.callout .dStroke {
-          color: #1a1230; -webkit-text-stroke: 8px #1a1230;
-          filter: drop-shadow(0 0 16px rgba(0,0,20,0.95))
-                  drop-shadow(0 0 7px rgba(0,0,20,0.9))
-                  drop-shadow(0 3px 0 #1a1230);
+          color: #12142e; -webkit-text-stroke: 6px #12142e;
+          filter: drop-shadow(0 2px 0 rgba(0,0,0,0.55));
         }
         /* background-image, NOT the background shorthand: the shorthand resets
            background-clip:text and would paint a solid slab. */
         #hud .dmg.callout .dFill {
-          background-image: linear-gradient(180deg, #fffdf2 0%, #fff4d2 42%, #ffe19a 74%, #e8b64a 100%);
+          background-image: linear-gradient(180deg, #ffffff 0%, #f2f6ff 52%, #cfdbfa 100%);
           -webkit-background-clip: text; background-clip: text; color: transparent;
-          -webkit-text-stroke: 2px rgba(232,182,74,0.55);
+        }
+        #hud .dmg.callout.water {
+          background: linear-gradient(180deg, #2a5c8c 0%, #1c3d68 42%, #0e2244 100%);
         }
         #hud .dmg.callout.water .dFill {
-          background-image: linear-gradient(180deg, #f4fdff 0%, #d6f4ff 42%, #8fdcff 76%, #35a6e8 100%);
+          background-image: linear-gradient(180deg, #ffffff 0%, #e6f6ff 52%, #a9dcff 100%);
           -webkit-background-clip: text; background-clip: text; color: transparent;
-          -webkit-text-stroke: 2px rgba(60,150,220,0.5);
         }
         @keyframes dmgFloat {
           0%   { transform: translate(-50%, 10px) scale(0.3); opacity: 0; }
@@ -1007,17 +1200,23 @@ export class UI {
            It used to laminate over the dock's top rail and chop the console's
            one unbroken gold border in half at frame centre. Now it clears the
            rail by 10px and carries its own 4-side trim. */
+        /* A transient KEY HINT, not a second HUD bar. It used to be a second
+           gold-rimmed navy pill in the identical material as the console,
+           floating 12px above it — so the bottom chrome read as a double bar
+           eating 148px of a 900px frame, and a tutorial line read as permanent
+           furniture. Now it is bare keycaps + outlined caption over the world,
+           and the hold-to-charge clause has moved inside the power trough where
+           the control actually is. */
         #hud .help {
-          position: absolute; bottom: calc(100% + 12px); left: 50%;
+          position: absolute; bottom: calc(100% + 9px); left: 50%;
           transform: translate(-50%, 0);
           display: flex; align-items: center; gap: 5px;
-          padding: 5px 14px 6px; border-radius: 12px;
-          background: linear-gradient(180deg, #2c3a6b, #1a2352 60%, #161e42);
-          border: 2px solid #e8b64a;
-          box-shadow: 0 0 0 2px #6b4a12, inset 0 1px 0 rgba(255,255,255,0.24);
-          filter: drop-shadow(0 4px 8px rgba(0,0,20,0.55));
+          padding: 0; border: none; background: none; box-shadow: none;
+          filter: drop-shadow(0 2px 4px rgba(0,0,20,0.8));
           color: #ffe7a0; font-size: 11px; font-weight: 800;
-          letter-spacing: 0.09em; text-shadow: 0 1px 2px #000; white-space: nowrap;
+          letter-spacing: 0.09em;
+          text-shadow: 0 2px 0 rgba(0,0,20,0.85), 0 0 8px rgba(0,0,20,0.9);
+          white-space: nowrap;
           transition: opacity 0.3s, visibility 0.3s, transform 0.3s;
         }
         #hud .help.gone {
@@ -1043,21 +1242,27 @@ export class UI {
         /* Each cluster is ONE welded control on its own plate — label, steppers
            and (for AIM) the live readout — instead of four islands scattered
            across 40px of terrain. */
+        /* Cluster plates wear the HUD's own material (navy gradient + gold
+           hairline + drop shadow). A flat translucent grey slab with a white
+           inner hairline carried none of the gold-trimmed navy language of the
+           top band and read as a debug panel over bright surf. */
         #hud .tcluster {
           position: absolute; display: none; gap: 10px; z-index: 6;
-          padding: 15px 9px 9px; border-radius: 20px;
-          background: rgba(8,14,34,0.42);
-          box-shadow: inset 0 1px 0 rgba(160,190,255,0.14);
+          padding: 17px 10px 10px; border-radius: 20px;
+          background: linear-gradient(180deg, rgba(20,32,74,0.68), rgba(8,14,34,0.76));
+          box-shadow: inset 0 1px 0 rgba(255,215,94,0.22),
+            0 0 0 1px rgba(232,182,74,0.30),
+            0 5px 14px rgba(0,0,12,0.5);
           bottom: calc(10px + env(safe-area-inset-bottom, 0px));
         }
         /* plated caption: gold micro-caps used to sit unbacked on open ocean
            and on pale cliff strata, where contrast collapsed to nothing */
         #hud .tcluster .tcap {
-          position: absolute; left: 50%; top: 1px; transform: translateX(-50%);
+          position: absolute; left: 50%; top: 2px; transform: translateX(-50%);
           padding: 1px 8px 2px; border-radius: 7px;
-          background: rgba(8,14,34,0.85);
-          box-shadow: inset 0 1px 0 rgba(160,190,255,0.18);
-          font-size: 9px; font-weight: 800; letter-spacing: 0.16em;
+          background: rgba(8,14,34,0.9);
+          box-shadow: inset 0 1px 0 rgba(255,215,94,0.22);
+          font-size: 11px; font-weight: 800; letter-spacing: 0.10em;
           color: #ffe9b0; text-shadow: 0 1px 2px #000;
           pointer-events: none;
         }
@@ -1067,15 +1272,22 @@ export class UI {
           right: calc(92px + env(safe-area-inset-right, 0px));
           flex-direction: column; align-items: center; gap: 6px;
         }
-        /* dead controls must LOOK dead: half the touch bar used to stay fully
-           lit while the shell was in the air and through the rival's turn */
-        #hud .tcluster.off .tbtn {
-          filter: grayscale(0.78) brightness(0.5);
-          border-color: #7a6a44;
-          box-shadow: 0 0 0 2px #3a3018, inset 0 1px 0 rgba(255,255,255,0.12);
+        /* Temporarily disabled, NOT broken. grayscale(.78) brightness(.5)
+           stripped the gold frame off every control the instant the shell left
+           the barrel — three of five capture frames showed a game that looked
+           like its stylesheet had failed to load. The chrome must survive the
+           disabled state; only its energy drops. */
+        #hud .tcluster.off .tbtn,
+        #hud .wsel.off .wchip {
+          filter: saturate(0.4) brightness(0.72);
+          opacity: 0.72;
+          border-color: rgba(232,182,74,0.45);
+          box-shadow: 0 0 0 2px rgba(107,74,18,0.6),
+            inset 0 1px 0 rgba(255,255,255,0.10);
         }
-        #hud .tcluster.off .tcap { color: #93a0c2; }
-        #hud .tcluster.off .angleChip { filter: grayscale(0.6) brightness(0.62); }
+        #hud .wsel.off .wchip.on { filter: saturate(0.5) brightness(0.58); }
+        #hud .tcluster.off .tcap, #hud .wsel.off .tcap { opacity: 0.8; }
+        #hud .tcluster.off .angleChip { opacity: 0.8; }
 
         /* --- weapon selector: the touch layout offered fewer verbs than the
            2003 reference. 1 / 2 / SS, active one ringed in gold. --- */
@@ -1084,27 +1296,32 @@ export class UI {
            the world's own distance marker. */
         #hud .wsel {
           position: absolute; display: none; z-index: 7;
-          gap: 6px; padding: 15px 9px 9px; border-radius: 20px;
-          background: rgba(8,14,34,0.42);
-          box-shadow: inset 0 1px 0 rgba(160,190,255,0.14);
-          left: calc(136px + env(safe-area-inset-left, 0px));
+          gap: 6px; padding: 17px 10px 10px; border-radius: 20px;
+          background: linear-gradient(180deg, rgba(20,32,74,0.68), rgba(8,14,34,0.76));
+          box-shadow: inset 0 1px 0 rgba(255,215,94,0.22),
+            0 0 0 1px rgba(232,182,74,0.30),
+            0 5px 14px rgba(0,0,12,0.5);
+          /* 30px clear of the MOVE plate: 20px between two 46px targets is
+             under the separation needed to avoid fat-finger mis-taps between
+             "walk left" and "switch weapon" */
+          left: calc(150px + env(safe-area-inset-left, 0px));
           bottom: calc(10px + env(safe-area-inset-bottom, 0px));
         }
         #hud .wsel .tcap {
-          position: absolute; left: 50%; top: 1px; transform: translateX(-50%);
+          position: absolute; left: 50%; top: 2px; transform: translateX(-50%);
           padding: 1px 8px 2px; border-radius: 7px;
-          background: rgba(8,14,34,0.85);
-          box-shadow: inset 0 1px 0 rgba(160,190,255,0.18);
-          font-size: 9px; font-weight: 800; letter-spacing: 0.16em;
+          background: rgba(8,14,34,0.9);
+          box-shadow: inset 0 1px 0 rgba(255,215,94,0.22);
+          font-size: 11px; font-weight: 800; letter-spacing: 0.10em;
           color: #ffe9b0; text-shadow: 0 1px 2px #000; pointer-events: none;
         }
         #hud .wchip {
-          pointer-events: auto; width: 36px; height: 36px; border-radius: 10px;
+          pointer-events: auto; width: 44px; height: 44px; border-radius: 12px;
           display: flex; align-items: center; justify-content: center;
           background: linear-gradient(180deg, #3b4a80, #1c2549 60%, #141b3d);
           border: 2px solid #6b4a12;
           box-shadow: inset 0 1px 0 rgba(255,255,255,0.24), 0 3px 8px rgba(0,0,0,0.5);
-          color: #aebbe8; font-size: 14px; font-weight: 800;
+          color: #aebbe8; font-size: 16px; font-weight: 800;
           text-shadow: 0 1px 2px #000; touch-action: none;
         }
         #hud .wchip.on {
@@ -1113,14 +1330,18 @@ export class UI {
           box-shadow: inset 0 1px 0 rgba(255,255,255,0.7),
             0 0 14px rgba(255,215,94,0.55), 0 3px 8px rgba(0,0,0,0.5);
         }
-        #hud .wsel.off .wchip { filter: grayscale(0.78) brightness(0.55); }
-
-        /* --- pause: every commercial game has one --- */
+        /* --- pause: every commercial game has one -------------------------
+           Docked to the top-RIGHT, welded to the Rival card's band, at the
+           card's own height so the whole top edge reads as one continuous
+           strip. Dead-centre at the top of a landscape phone is the single
+           least reachable point on the screen and it left the button visually
+           orphaned between two elements it did not share a baseline with. */
         #hud .pauseBtn {
           position: absolute; display: none; z-index: 9;
-          top: calc(6px + env(safe-area-inset-top, 0px));
-          left: 50%; transform: translateX(70px);
-          pointer-events: auto; width: 34px; height: 34px; border-radius: 10px;
+          top: calc(var(--hud-gutter) + env(safe-area-inset-top, 0px));
+          right: calc(196px + env(safe-area-inset-right, 0px));
+          left: auto; transform: none;
+          pointer-events: auto; width: 40px; height: 40px; border-radius: 11px;
           align-items: center; justify-content: center; gap: 3px;
           background: linear-gradient(180deg, #3b4d8f, #232e5c 45%, #131a38);
           border: 2px solid #e8b64a;
@@ -1234,30 +1455,48 @@ export class UI {
           #hud .bStroke { -webkit-text-stroke-width: 5px; }
           #hud .dmg > span { font-size: 34px; }
           #hud .dmg .dStroke { -webkit-text-stroke-width: 6px; }
-          #hud .dmg.callout > span { font-size: 26px; }
-          #hud .dmg.callout .dStroke { -webkit-text-stroke-width: 4.5px; }
+          #hud .dmg.callout { padding: 3px 20px 6px; }
+          #hud .dmg.callout > span { font-size: 36px; letter-spacing: 2px; }
+          #hud .dmg.callout .dStroke { -webkit-text-stroke-width: 5px; }
+          #hud .pmob { display: none; }
         }
 
         /* charge readout under the thumb that is doing the charging: a conic
            ring wrapped around FIRE, used on short viewports where the console's
            power trough is gone entirely */
+        /* Two conic layers: the live charge on top, and — underneath — a dim
+           arc at the power the LAST shot committed, so the thumb has a target
+           to charge toward instead of guessing blind on every correction. */
         #hud .powerRing {
           position: fixed; display: none; z-index: 39;
           right: calc(4px + env(safe-area-inset-right, 0px));
           bottom: calc(4px + env(safe-area-inset-bottom, 0px));
           width: 88px; height: 88px; border-radius: 50%;
-          background: conic-gradient(#ffcf4a var(--pow, 0turn), rgba(6,10,26,0.5) 0);
+          background:
+            conic-gradient(#ffcf4a var(--pow, 0turn), rgba(0,0,0,0) 0),
+            conic-gradient(rgba(255,207,74,0.34) var(--powLast, 0turn), rgba(6,10,26,0.5) 0);
           box-shadow: 0 0 0 2px rgba(10,15,34,0.9), 0 4px 12px rgba(0,0,10,0.5);
           pointer-events: none;
+          /* punched out to an actual RING: as a filled disc it could only ever
+             be a wash sitting behind (or, on a bad stacking day, in front of)
+             the button it wraps */
+          -webkit-mask-image: radial-gradient(closest-side, transparent 0 78%, #000 82%);
+          mask-image: radial-gradient(closest-side, transparent 0 78%, #000 82%);
         }
+        /* Tethered to the control it describes and lifted clear of the
+           home-indicator gesture zone. It used to float bottom-centre, 12px
+           from the frame edge and ~200px from the FIRE button — an instruction
+           placed nowhere near its control. */
         #hud .fireCap {
           position: fixed; display: none; z-index: 8;
-          left: 50%; transform: translateX(-50%);
-          bottom: calc(9px + env(safe-area-inset-bottom, 0px));
-          padding: 3px 12px 4px; border-radius: 9px;
-          background: rgba(8,14,34,0.82);
-          box-shadow: inset 0 1px 0 rgba(160,190,255,0.18);
-          font-size: 10px; font-weight: 800; letter-spacing: 0.13em;
+          left: auto; transform: none;
+          right: calc(10px + env(safe-area-inset-right, 0px));
+          bottom: calc(90px + env(safe-area-inset-bottom, 0px));
+          width: 76px; text-align: center; line-height: 1.2;
+          padding: 3px 4px 4px; border-radius: 9px;
+          background: rgba(8,14,34,0.9);
+          box-shadow: inset 0 1px 0 rgba(255,215,94,0.25);
+          font-size: 11px; font-weight: 800; letter-spacing: 0.06em;
           color: #ffe9b0; text-shadow: 0 1px 2px #000;
           pointer-events: none; animation: hintPulse 1.5s ease-in-out infinite;
         }
@@ -1297,9 +1536,18 @@ export class UI {
             top: calc(5px + env(safe-area-inset-top, 0px));
             left: 50%; transform: translateX(-122px);
           }
+          /* Opaque backing: the world's sun bloom used to punch straight
+             through the TIME caption and erase it. No HUD label may depend on
+             what the procedural sky renders behind it. */
+          #hud .timerBox::before {
+            content: ''; position: absolute; inset: -4px -9px -3px;
+            border-radius: 16px; z-index: -1;
+            background: rgba(8,14,34,0.74);
+            box-shadow: inset 0 1px 0 rgba(255,215,94,0.18);
+          }
           #hud .timerBox .miniLabel {
-            display: block; height: 10px; line-height: 10px;
-            font-size: 8px; letter-spacing: 1.6px;
+            display: block; height: 13px; line-height: 13px;
+            font-size: 11px; letter-spacing: 0.10em;
           }
           #hud .timerRing { width: 46px; height: 46px; }
           #hud .timerFace { width: 30px; height: 30px; }
@@ -1316,18 +1564,29 @@ export class UI {
           #hud.touch .wsel, #hud.touch .pauseBtn { display: flex; }
           #hud.touch .fireCap { display: block; }
           #hud.touch .angleChip { display: flex; }
-          #hud .angleChip .acPow { display: none; }
-          #hud .tcluster { gap: 6px; padding: 14px 8px 8px; }
+          /* The only power readout on this layout used to be the conic ring —
+             which exists ONLY while the thumb is down. Every correction shot
+             was charged blind. The last committed power now lives permanently
+             in the aim chip, right under the angle it goes with. */
+          #hud .angleChip { flex-direction: column; gap: 0; padding: 3px 6px 4px; }
+          #hud .angleChip .acPow {
+            display: block; font-size: 11px; letter-spacing: 0.04em; line-height: 1.1;
+          }
+          #hud .angleChip .acPow.last { color: #9fb0dd; }
+          #hud .pauseBtn { top: calc(5px + env(safe-area-inset-top, 0px)); }
+          #hud .tcluster { gap: 6px; padding: 19px 8px 8px; }
           #hud .tcluster.moveC { left: calc(6px + env(safe-area-inset-left, 0px)); }
+          #hud .wsel { padding: 19px 8px 8px; }
           #hud .tbtn { width: 46px; height: 46px; font-size: 18px; }
           /* top edge = one band: a real compact compass, not a squashed one
              (the scale transform halved its border weight next to the cards) */
           #hud .windWrap { top: calc(5px + env(safe-area-inset-top, 0px)); }
-          #hud .windPlate { padding: 3px 11px 3px 4px; gap: 6px; }
-          #hud .wind { width: 44px; height: 44px; }
-          #hud .windSvg .wax { font-size: 21px; stroke-width: 4px; }
-          #hud .windLabel { font-size: 8px; letter-spacing: 1.4px; }
-          #hud .windBadge { font-size: 19px; }
+          #hud .windPlate { height: 46px; padding: 0 11px 0 4px; gap: 6px; }
+          #hud .wind { width: 38px; height: 38px; flex: 0 0 38px; }
+          #hud .windSvg .wax { font-size: 19px; stroke-width: 4px; }
+          #hud .windLabel { font-size: 10px; letter-spacing: 0.10em; }
+          #hud .windBadge { font-size: 21px; }
+          #hud .windRead .wunit { display: none; }
           #hud .players { top: calc(5px + env(safe-area-inset-top, 0px)); width: 178px; }
           #hud .pcard { padding: 5px 8px 6px; border-radius: 10px; }
           #hud .portraitFrame { flex: 0 0 28px; width: 28px; height: 28px; }
@@ -1335,8 +1594,9 @@ export class UI {
           #hud .hpnum { font-size: 12px; }
           #hud .hpbar { height: 10px; margin-top: 3px; }
           #hud .avatar { width: 11px; height: 11px; flex: 0 0 11px; }
-          /* a slim ribbon in the upper third, never over the trajectory */
-          #hud .banner { top: 17%; }
+          /* a slim ribbon in the upper third, never over the trajectory, and
+             clear of the HP cards' 48px band */
+          #hud .banner { top: 21%; }
           #hud .banner.sideL { padding-left: 5%; }
           #hud .banner.sideR { padding-right: 5%; }
           #hud .banner .bInner > span { font-size: 22px; letter-spacing: 0.5px; }
@@ -1345,8 +1605,12 @@ export class UI {
           #hud .banner .bGlow { width: 320px; height: 90px; }
           #hud .dmg > span { font-size: 30px; }
           #hud .dmg .dStroke { -webkit-text-stroke-width: 5px; }
-          #hud .dmg.callout > span { font-size: 22px; }
-          #hud .dmg.callout .dStroke { -webkit-text-stroke-width: 3.5px; }
+          /* At 390px tall a 22px callout was ~6% of screen height for the one
+             message that decides the shot. GunBound's are proportionally
+             double that. */
+          #hud .dmg.callout { padding: 2px 16px 5px; border-radius: 8px; }
+          #hud .dmg.callout > span { font-size: 34px; letter-spacing: 2px; }
+          #hud .dmg.callout .dStroke { -webkit-text-stroke-width: 5px; }
         }
       </style>
 
@@ -1361,9 +1625,9 @@ export class UI {
                 </linearGradient>
               </defs>
               <g class="windTicks"></g>
-              <text class="wax" x="9" y="50" text-anchor="middle"
+              <text class="wax" x="7" y="50" text-anchor="middle"
                 dominant-baseline="central">L</text>
-              <text class="wax" x="91" y="50" text-anchor="middle"
+              <text class="wax" x="93" y="50" text-anchor="middle"
                 dominant-baseline="central">R</text>
               <g class="needleG">
                 <g class="windStreaks" stroke="rgba(255,255,255,0.4)"
@@ -1386,6 +1650,7 @@ export class UI {
           <div class="windRead">
             <div class="windLabel">WIND</div>
             <div class="windBadge">0</div>
+            <div class="wunit">m/s</div>
           </div>
         </div>
       </div>
@@ -1423,8 +1688,6 @@ export class UI {
             <span class="key">&#8592;</span><span class="key">&#8594;</span><span class="ht">MOVE</span>
             <span class="sep"></span>
             <span class="key">&#8593;</span><span class="key">&#8595;</span><span class="ht">AIM</span>
-            <span class="sep"></span>
-            <span class="key kw">SPACE</span><span class="ht">HOLD TO FIRE</span>
           </div>
           <div class="row">
             <div class="col idBox">
@@ -1466,23 +1729,25 @@ export class UI {
               <div class="timerRing"><div class="timerFace"><div class="timer">20</div></div></div>
               <div class="miniLabel">TIME</div>
             </div>
-            <div class="fireBtn">
-              <span class="fLabel">FIRE</span>
-              <i class="fDots"><b></b><b></b><b></b></i>
+            <div class="col fireCol">
+              <div class="fireBtn">
+                <span class="fLabel">FIRE</span>
+                <i class="fDots"><b></b><b></b><b></b></i>
+              </div>
+              <div class="miniLabel fireKey">SPACE</div>
             </div>
           </div>
         </div>
 
         <div class="wing wingR">
-          <div class="wStat">
+          <div class="wStat lastShotBox pend">
             <div class="lastShot">
-              <span class="lsv lsA empty">&ndash;</span><span class="lsv lsP empty">&ndash;</span>
+              <span class="lsv lsA empty">&ndash;&ndash;&#176;</span><span class="lsv lsP empty">&ndash;&ndash;%</span>
             </div>
             <div class="miniLabel">LAST SHOT</div>
           </div>
           <div class="wStat">
-            <div class="wNum roundNum">1</div>
-            <div class="miniLabel">ROUND</div>
+            <div class="roundInline">ROUND <b class="roundNum">1</b></div>
           </div>
         </div>
       </div>
@@ -1505,7 +1770,7 @@ export class UI {
         <div class="wchip" data-w="2">SS</div>
         <span class="tcap">SHOT</span>
       </div>
-      <div class="fireCap">HOLD FIRE TO CHARGE</div>
+      <div class="fireCap">HOLD TO CHARGE</div>
       <div class="pauseBtn"><i></i><i></i></div>
       <div class="pauseVeil">PAUSED</div>
       <div class="rotateOverlay">
@@ -1530,6 +1795,7 @@ export class UI {
       orderQ: root.querySelector('.orderQ'),
       lsA: root.querySelector('.lsA'),
       lsP: root.querySelector('.lsP'),
+      lastShotBox: root.querySelector('.lastShotBox'),
       roundNum: root.querySelector('.roundNum'),
       angle: root.querySelector('.angle'),
       anglePrev: root.querySelector('.anglePrev'),
@@ -1579,7 +1845,7 @@ export class UI {
         const c = Math.cos(a), s = Math.sin(a);
         t += `<line x1="${(50 + c * 42).toFixed(1)}" y1="${(50 + s * 42).toFixed(1)}"
           x2="${(50 + c * 46.5).toFixed(1)}" y2="${(50 + s * 46.5).toFixed(1)}"
-          stroke="rgba(255,215,94,0.45)" stroke-width="2.5" stroke-linecap="round"/>`;
+          stroke="#e8b64a" stroke-width="2.8" stroke-linecap="round"/>`;
       }
       this.el.windTicks.innerHTML = t;
     }
@@ -1615,6 +1881,15 @@ export class UI {
     this._round = 0;
     this._shotPending = false; // a shell is in the air / awaiting resolution
     this._shotDmg = false;     // did that shell do damage? (else -> MISS)
+    this._lastPow = null;      // power of the previous shot (persistent readout)
+
+    // The empty power trough is the largest object on the console; before the
+    // first shot it now names its own control instead of reading as an
+    // unfinished black slot. Wording follows the input the player actually has.
+    {
+      const h = root.querySelector('.powerHint');
+      if (h) h.textContent = this.isTouch ? 'HOLD FIRE TO CHARGE' : 'HOLD SPACE TO CHARGE';
+    }
 
     // Control hint retires itself after ~6s even if the player never fires.
     // Frame-counted (not wall clock) so fixed-dt capture runs behave the same.
@@ -1705,12 +1980,15 @@ export class UI {
     // orange -> hot-red ramp. Only the rotation says which way.
     const s = Math.abs(wind);
     this.el.windVal.textContent = s.toFixed(0);
-    const t = Math.min(1, s / MAX_WIND);
+    // sqrt ramp: real matches spend most of their life at wind 1-3, and a
+    // linear map over 0..7 made 1 and 2 the same picture. Square-rooting puts
+    // the resolution where the values actually live.
+    const t = Math.min(1, Math.sqrt(s / MAX_WIND));
     // Geometry in the 100-unit viewBox, centred on (50,50).
-    const L = 17 + 16 * t;                 // half-length: 17 -> 33
-    const hl = 12 + 5 * t;                 // head length
-    const hh = 9.5 + 4.5 * t;              // head half-height
-    const sh = 3.2 + 2.6 * t;              // shaft half-height
+    const L = 13 + 21 * t;                 // half-length: 13 -> 34
+    const hl = 10 + 7 * t;                 // head length
+    const hh = 7.5 + 7 * t;                // head half-height
+    const sh = 2.2 + 4.0 * t;              // shaft half-height
     const x0 = 50 - L, x1 = 50 + L, xn = x1 - hl;
     this.el.windArrow.setAttribute('d',
       `M ${x0.toFixed(1)} ${(50 - sh).toFixed(1)} L ${xn.toFixed(1)} ${(50 - sh).toFixed(1)}` +
@@ -1722,9 +2000,9 @@ export class UI {
     // tail -> head ramp, all inside the navy/gold system
     let tail, head;
     if (s === 0) { tail = '#6f7fa8'; head = '#a8b6d8'; }
-    else if (t <= 0.4) { tail = '#e89a2a'; head = '#ffe9a8'; }
-    else if (t <= 0.7) { tail = '#ff9436'; head = '#ffe27a'; }
-    else { tail = '#e0491f'; head = '#ff5a3c'; }
+    else if (t <= 0.45) { tail = '#e89a2a'; head = '#ffe9a8'; }
+    else if (t <= 0.75) { tail = '#ff8a20'; head = '#ffd06a'; }
+    else { tail = '#d43516'; head = '#ff6a45'; }
     this.el.windHi.setAttribute('stop-color', tail);
     this.el.windLo.setAttribute('stop-color', head);
     this.el.windStreaks.style.opacity = s === 0 ? '0' : (0.25 + 0.55 * t).toFixed(2);
@@ -1768,15 +2046,26 @@ export class UI {
     this.el.dock.classList.toggle('charging', hot);
     // Live value replaces the hold-to-charge caption inside the trough, and
     // drives the conic ring around FIRE on the touch layout.
-    if (this.el.powerNum) this.el.powerNum.textContent = `${Math.round(p)}%`;
+    // Trough numeral: live figure while charging, last-committed figure the
+    // rest of the time (see .powerWrap.hasLast).
+    if (this.el.powerNum) {
+      this.el.powerNum.textContent = hot ? `${Math.round(p)}%`
+        : this._lastPow != null ? `LAST ${this._lastPow}%` : '';
+    }
     if (this.el.powerRing)
       this.el.powerRing.style.setProperty('--pow', `${(p / 100).toFixed(3)}turn`);
     if (this.el.fireCap) {
       this.el.fireCap.classList.toggle('hot', hot);
-      this.el.fireCap.textContent = hot ? `${Math.round(p)}%` : 'HOLD FIRE TO CHARGE';
+      this.el.fireCap.textContent = hot ? `${Math.round(p)}%` : 'HOLD TO CHARGE';
     }
-    // Live power numeral next to the angle chip (the touch layout's readout).
-    if (this.el.acPow) this.el.acPow.textContent = p > 0 ? `${Math.round(p)}%` : '';
+    // Power readout in the aim chip: the live charge while the thumb is down,
+    // otherwise the power the last shot committed — so a correction shot is
+    // never charged blind on the layout where the trough does not exist.
+    if (this.el.acPow) {
+      const last = this._lastPow;
+      this.el.acPow.textContent = hot ? `${Math.round(p)}%` : last != null ? `${last}%` : '';
+      this.el.acPow.classList.toggle('last', !hot);
+    }
     if (lit === this._lit) return;
     for (let i = 0; i < SEGS; i++) {
       this.segs[i].classList.toggle('on', i < lit);
@@ -1787,7 +2076,18 @@ export class UI {
 
   setLastPower(p) {
     // Previous shot's power: white marker + dimmed ghost fill (GunBound staple).
+    this._lastPow = Math.round(p);
     this._ghost = Math.round((p / 100) * SEGS);
+    this.el.powerWrap.classList.add('hasLast');
+    if (this.el.powerNum) this.el.powerNum.textContent = `LAST ${this._lastPow}%`;
+    if (this.el.powerRing)
+      this.el.powerRing.style.setProperty('--powLast', `${(p / 100).toFixed(3)}turn`);
+    if (this.el.acPow) {
+      this.el.acPow.textContent = `${this._lastPow}%`;
+      this.el.acPow.classList.add('last');
+    }
+    // LAST SHOT stops being two em-dash placeholders and becomes live data.
+    if (this.el.lastShotBox) this.el.lastShotBox.classList.remove('pend');
     for (let i = 0; i < SEGS; i++)
       this.segs[i].classList.toggle('ghost', i >= this._lit && i < this._ghost);
     this.el.powerLast.style.left = `${p}%`;
@@ -1833,11 +2133,16 @@ export class UI {
     // turns: a full ring and an empty ring can never look the same. The rival's
     // turn cools the arc to steel instead of erasing it. Red is reserved
     // strictly for t<=5 so it only ever means "hurry".
-    const live = t <= 5 ? '#ff5b4d' : this._rivalTurn ? '#7f90bd' : '#ffd75e';
-    const spent = '#141c40';
+    // Urgency ramp: gold -> amber -> red as the arc drains, so time pressure
+    // reads pre-attentively instead of only at the five-second mark.
+    const live = this._rivalTurn ? '#7f90bd'
+      : t <= 5 ? '#ff4a3d'
+      : frac > 0.45 ? '#ffd75e'
+      : frac > 0.22 ? '#ff9d3c' : '#ff6b4d';
+    const spent = '#0e1330';
     // A full ring is painted flat, not as a 0->1turn conic: the wrap point left
     // a 2px notch at 12 o'clock that read as a chip in the metal.
-    this.el.timerRing.style.background = frac >= 0.999 ? live
+    this.el.timerRing.style.background = frac >= 0.985 ? live
       : `conic-gradient(${live} 0turn ${frac}turn, ${spent} ${frac}turn 1turn)`;
     this.el.timerRing.classList.toggle('low', t <= 5 && t > 0);
   }
@@ -1947,7 +2252,7 @@ export class UI {
       const y = h / 2 - ((f.y - cam.position.y) / halfH) * (h / 2);
       // Keep it inside the readable band (clear of the top plates and the dock).
       return {
-        x: Math.max(70, Math.min(w - 70, x)),
+        x: Math.max(125, Math.min(w - 125, x)),
         y: Math.max(96, Math.min(h - 150, y)),
       };
     } catch { return null; }
@@ -1982,7 +2287,17 @@ export class UI {
     // white-hot core of the fireball (the one place they were guaranteed to be
     // unreadable). Damage numbers rise from the hit itself.
     const lift = callout ? this._calloutLift() : 26;
-    if (at) {
+    const H = this.root.clientHeight || 900;
+    if (callout) {
+      // Centred on the impact, never jittered: a callout offset up-and-left of
+      // the blast reads as unanchored. On short viewports it is pinned to a
+      // fixed slot below the top HUD band so it can never sit on the plume.
+      const short = H < 520;
+      const x = at ? at.x : this.root.clientWidth / 2;
+      const y = short ? H * 0.24 : Math.max(78, (at ? at.y : H * 0.47) - lift);
+      d.style.left = `${Math.round(x)}px`;
+      d.style.top = `${Math.round(y)}px`;
+    } else if (at) {
       d.style.left = `${at.x + (Math.random() - 0.5) * 26}px`;
       d.style.top = `${Math.max(64, at.y - lift + (Math.random() - 0.5) * 12)}px`;
     } else {
@@ -2032,7 +2347,7 @@ export class UI {
   // How far above the impact a callout is planted, in CSS px — enough to clear
   // the fireball entirely at both layouts.
   _calloutLift() {
-    return this.root.clientHeight < 520 ? 84 : 150;
+    return this.root.clientHeight < 520 ? 84 : 170;
   }
 
   renderPlayers(mobiles) {
@@ -2045,15 +2360,27 @@ export class UI {
     }
     // Turn-order queue chips (built once, in play order).
     if (this.el.orderQ && !this.el.orderQ.childElementCount && mobiles.length) {
-      for (const m of mobiles) {
+      mobiles.forEach((m, i) => {
+        if (i) {
+          const sep = document.createElement('span');
+          sep.className = 'oArrow';
+          sep.textContent = '❯';
+          this.el.orderQ.appendChild(sep);
+        }
         const chip = document.createElement('div');
         chip.className = 'oChip';
         chip.dataset.name = m.name;
         const cv = document.createElement('canvas');
         chip.appendChild(cv);
+        const ord = document.createElement('i');
+        ord.className = 'oNum';
+        ord.textContent = String(i + 1);
+        chip.appendChild(ord);
         this.el.orderQ.appendChild(chip);
-        paintPortrait(cv, m.typeKey, m.type, 26);
-      }
+        // 30px face in a 34px chip: at the old 18px the two mobiles were just
+        // a teal smudge and a red one, with no silhouette and no charm.
+        paintPortrait(cv, m.typeKey, m.type, 30);
+      });
       this._syncOrder();
     }
     for (const m of mobiles) {
@@ -2093,6 +2420,7 @@ export class UI {
         <div class="pMain">
           <div class="pTop">
             <div class="avatar"></div>
+            <div class="pmob"></div>
             <div class="pname"></div>
             <div class="hpnum"><span class="hpv"></span><span class="hpmax">/100</span></div>
           </div>
@@ -2105,14 +2433,16 @@ export class UI {
         </div>
       </div>`;
     paintPortrait(card.querySelector('.portraitFrame canvas'), m.typeKey, m.type, 42);
-    // Faceted team gem: 4 conic facets in the mobile's color + specular dot.
     const avatar = card.querySelector('.avatar');
     const body = m.type.body;
-    avatar.style.background =
-      `radial-gradient(circle at 30% 28%, rgba(255,255,255,0.95) 0 1.5px, rgba(255,255,255,0) 3px), ` +
-      `conic-gradient(from 45deg, ` +
-      `color-mix(in srgb, ${body} 55%, #fff) 0 25%, ${body} 0 50%, ` +
-      `color-mix(in srgb, ${body} 55%, #000) 0 75%, color-mix(in srgb, ${body} 80%, #000) 0)`;
+    // Mobile name tag, tinted in that mobile's own colour: replaces the old
+    // unexplained gem with something the player can act on, and still carries
+    // the team read at a glance.
+    const mob = card.querySelector('.pmob');
+    if (mob) {
+      mob.textContent = (m.type.name || m.typeKey || '').toUpperCase();
+      mob.style.color = `color-mix(in srgb, ${body} 62%, #ffffff)`;
+    }
     const c = {
       card,
       name: card.querySelector('.pname'),
