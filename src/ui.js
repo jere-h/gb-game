@@ -23,7 +23,21 @@ const COACH_YIELD = new Set([
 // budget for SUSTAINED input, and running it out closes onboarding as
 // "not completed", so it is offered again on the next visit rather than lost.
 const COACH_HOLD_BUDGET = 2500;
-const ZOOM_STEP = 0.2; // one press of the +/- stepper, in 0..1 zoom level
+// One press of the +/− stepper, in 0..1 zoom level. Used only when the HUD has
+// not yet learned where the game's own framing sits; otherwise the press is
+// sized against the travel that actually remains on that side of it (see
+// _zoomStep). The automatic frame is NOT in the middle of the range: measured
+// at 844x390 it rests at 0.767, so a flat 0.2 left ~1.17 presses of widening
+// above it — one and a bit presses in the only direction the whole feature
+// exists for, and a gauge that saturated to MAX with real travel still in hand.
+const ZOOM_STEP = 0.2;
+// Presses from the resting frame to either end stop. Three is enough to make
+// each press a visible move and few enough that reaching the widest view is
+// not a chore; the ladder it produces on a phone is NORMAL -> WIDE -> WIDER ->
+// MAX, one word per press.
+const ZOOM_PRESSES = 3;
+const ZOOM_STEP_MIN = 0.05;   // never so small that a press is invisible
+const ZOOM_STEP_MAX = 0.28;   // never so large that a press is a jump cut
 
 // Linear interpolate two #rrggbb colors -> 'rgb(...)'.
 function lerpColor(a, b, t) {
@@ -1693,7 +1707,23 @@ export class UI {
         #hud .cbtn::before {
           content: ''; position: absolute; inset: -5px -6px; border-radius: 12px;
         }
+        /* SURVEY and RESET are the only two adjacent chips in the column, so
+           they are the only pair whose slops can COLLIDE — and a collision here
+           is not a near miss, it is the opposite action. Symmetric -9px slop in
+           an 8px gutter had each chip reaching 9px past its own face into a gap
+           only 8px wide, so the two claimed the same 10px band; RESET paints
+           later, so it won, and the bottom of SURVEY's own painted face fired
+           RESET (which hands the camera straight back to automatic). The slop
+           is now asymmetric: each chip keeps a generous reach AWAY from its
+           twin and takes exactly half the gutter (4px) TOWARD it, so the two
+           targets tile the column with zero overlap. */
         #hud .cbtn.wide::before { inset: -9px -6px; }
+        #hud .cbtn.wide.cSurvey::before { inset: -9px -6px -4px; }
+        #hud .cbtn.wide.cReset::before  { inset: -4px -6px -9px; }
+        /* A finger is not a mouse: on any touch device these two chips carry a
+           taller face, so the target clears the 44px floor from paint alone
+           rather than leaning on slop that has to share a gutter. */
+        #hud.touch .cbtn.wide { height: 34px; }
         #hud .cbtn:active {
           transform: translateY(1px); filter: brightness(1.35);
           box-shadow: inset 0 1px 0 rgba(255,255,255,0.28), 0 1px 0 rgba(0,0,0,0.6),
@@ -2069,16 +2099,32 @@ export class UI {
             right: calc(10px + env(safe-area-inset-right, 0px));
             transform: none; gap: 0;
           }
-          #hud .camBar { gap: 2px; padding: 4px 6px 6px; border-radius: 14px; }
-          #hud .cbtn { width: 46px; height: 34px; font-size: 19px; }
-          #hud .cbtn::before { inset: -5px -7px; }        /* target 60x44 */
-          #hud .cbtn.wide {
-            width: 46px; height: 30px; font-size: 11px; letter-spacing: 0.03em;
+          /* The rail's row budget, re-cut. The old cut spent its pixels on the
+             two 34px steppers and the 24px trough and left SURVEY and RESET on
+             30px faces leaning on 7px of slop each — into a 2px gutter, so the
+             two of them claimed the same 12px band and RESET, painting later,
+             took the bottom of SURVEY's own face. Since a chip cannot reach
+             past its twin, the two chips that need the room now HAVE it: 36px
+             faces with 1px of slop toward each other, which is exactly half the
+             2px gutter. The 8px this costs comes out of the steppers (34 -> 32,
+             slop 5 -> 6, target unchanged) and the trough (24 -> 20), plus 2px
+             of the plate's own padding: every target in the column is still
+             60x44, and now none of them overlaps another.
+             Column at 844x390, measured: + 74..118, - 130..174,
+             SURVEY 177..221, RESET 221..265. */
+          #hud .camBar { gap: 2px; padding: 3px 6px 4px; border-radius: 14px; }
+          #hud .cbtn { width: 46px; height: 32px; font-size: 19px; }
+          #hud .cbtn::before { inset: -6px -7px; }        /* target 60x44 */
+          #hud.touch .cbtn.wide, #hud .cbtn.wide {
+            width: 46px; height: 36px; font-size: 11px; letter-spacing: 0.03em;
           }
-          #hud .cbtn.wide::before { inset: -7px -7px; }   /* target 60x44 */
-          #hud .cbtn.cReset { height: 30px; font-size: 11px; }
-          #hud .camGauge { width: 46px; height: 24px; }
-          /* 24px of trough cannot carry quarter graduations — at 6px apart they
+          /* Half the 2px gutter each, and a full 7px away from the twin: the
+             two targets tile 177..221 and 221..265 with nothing in common. */
+          #hud .cbtn.wide.cSurvey::before { inset: -7px -7px -1px; }  /* target 60x44 */
+          #hud .cbtn.wide.cReset::before  { inset: -1px -7px -7px; }  /* target 60x44 */
+          #hud.touch .cbtn.cReset, #hud .cbtn.cReset { height: 36px; font-size: 11px; }
+          #hud .camGauge { width: 46px; height: 20px; }
+          /* 20px of trough cannot carry quarter graduations — at 5px apart they
              are noise. One half-way mark, plus the auto baseline. */
           #hud .camTicks {
             background: linear-gradient(180deg,
@@ -2540,6 +2586,7 @@ export class UI {
     this._tutCancelled = false; // player started playing before it could open
     this._coachRaf = 0;
     this._coachKey = '';        // last applied coach geometry (skips redundant writes)
+    this._coachPick = -1;       // placement candidate in possession (see _coachPlace)
     this._tutShown = -1;        // step index currently rendered (-1 = none)
     this._tutGate = false;      // this step waits for a real input, not a click
     this._tutCharging = false;  // the gate's charge is live (time may pass)
@@ -2625,13 +2672,18 @@ export class UI {
     // with bands visibly still above it instead of announcing "WIDE" at the
     // exact framing that generated the complaint. Saturation always wins: at
     // the limit the word is the limit.
+    // MAX is now spoken by SATURATION ALONE. It used to be the top band of the
+    // ladder as well, at u >= 0.85, and the resting frame on a phone sits at
+    // u = 0.20 with a 0.2 stepper — so the very first press landed at u = 0.89
+    // and the rail announced MAX with a whole press of real travel still in
+    // hand. A readout that says "this is as far as it goes" while the lens can
+    // still open is the same lie as a dimmed button that still works.
     const word = sat.atMax ? 'MAX'
       : sat.atMin ? 'AIM'
       : u < 0.07 ? 'AIM'
       : u < 0.15 ? 'CLOSE'
       : u < 0.30 ? 'NORMAL'
-      : u < 0.55 ? 'WIDE'
-      : u < 0.85 ? 'WIDER' : 'MAX';
+      : u < 0.55 ? 'WIDE' : 'WIDER';
     if (this.el.camVal && this.el.camVal.textContent !== word)
       this.el.camVal.textContent = word;
     if (this.el.camBar) this.el.camBar.classList.toggle('manual', man);
@@ -2702,6 +2754,26 @@ export class UI {
 
   _hooks() { try { return window.__GB || null; } catch { return null; } }
 
+  // How far one press of the stepper should move the lens, from where it is now.
+  // The travel either side of the game's own framing is wildly asymmetric — the
+  // automatic frame rests at ~0.77 of the range, so there is three times as much
+  // room to push IN as there is to pull OUT — and a single constant is therefore
+  // either too coarse one way or too fine the other. Sizing the press against
+  // the side it is spending gives the same honest press count in both
+  // directions, and (because the gauge is remapped around the same origin, see
+  // setZoom) the same number of word-bands crossed per press.
+  _zoomStep(cur) {
+    const a = Number(this._autoLevel);
+    if (!Number.isFinite(a) || a <= 0.02 || a >= 0.98) return ZOOM_STEP;
+    // The tolerance is not cosmetic. `cur` is the lens TARGET and `a` is the
+    // last automatic level REPORTED, and at rest they sit a thousandth apart
+    // in whichever order the easing left them — so an exact comparison put a
+    // press from the untouched frame on the wrong side of the origin and spent
+    // the whole widening range in one go.
+    const span = cur >= a - 0.03 ? 1 - a : a;
+    return Math.max(ZOOM_STEP_MIN, Math.min(ZOOM_STEP_MAX, span / ZOOM_PRESSES));
+  }
+
   // dir -1 = tighter, +1 = wider.
   _camStep(dir) {
     this._camDemoAbort();
@@ -2709,7 +2781,8 @@ export class UI {
     const before = this._camTargetLevel();
     const cur = G && typeof G.zoomTarget === 'function' ? G.zoomTarget()
       : (G && typeof G.zoomLevel === 'function' ? G.zoomLevel() : this._zoom);
-    const t = Math.max(0, Math.min(1, (Number(cur) || 0) + dir * ZOOM_STEP));
+    const c = Number(cur) || 0;
+    const t = Math.max(0, Math.min(1, c + dir * this._zoomStep(c)));
     if (G && typeof G.setZoomLevel === 'function') G.setZoomLevel(t);
     const after = this._camTargetLevel();
     // Nothing moved. A stepper that keeps accepting presses at the limit is the
@@ -2738,7 +2811,19 @@ export class UI {
       this._bumpT = setTimeout(() => bar.classList.remove('bump'), 260);
     }
     // Not while the coach owns the screen: its own card is the message there.
-    if (!this._tutOpen && msg) this._toastAt(bar, msg, 1800);
+    // EXCEPT on the camera step, which hands the pointer back and says "TRY IT"
+    // about these very controls. Suppressing the plaque there meant a player
+    // doing exactly what the step asked got a 180ms bump and no words at all —
+    // on the one step whose whole job is to prove the camera answers them. At a
+    // limit reached during that lesson, the limit IS the lesson.
+    if (msg && (!this._tutOpen || this._onCamStep())) this._toastAt(bar, msg, 1800);
+  }
+
+  // Is the coach currently showing the camera step? (Additive helper.)
+  _onCamStep() {
+    if (!this._tutOpen || !this._steps) return false;
+    const st = this._steps[this._tutShown];
+    return !!(st && st.cam);
   }
 
   _bindCamRail() {
@@ -3256,6 +3341,19 @@ export class UI {
     this._coachKey = '';
   }
 
+  // Where the camera step's demonstration PARKS the lens. It used to park it on
+  // the end stop (level 1.0) and then hand the player a card reading "− widens
+  // … TRY IT": the one control the step names by symbol was greyed out and
+  // spent before they could touch it, so the step that exists to prove the
+  // camera is theirs ended by proving it is not. The demo now stops a third of
+  // the way up the widening travel — visibly wider than the frame they were
+  // handed, reading WIDE, with two full presses of "−" still to spend.
+  _camDemoWide() {
+    const a = Number(this._autoLevel);
+    if (!Number.isFinite(a) || a <= 0.02 || a >= 0.98) return 0.7;
+    return Math.min(0.97, a + (1 - a) * 0.35);
+  }
+
   // The camera step's demonstration: push in to the aiming lens, then widen
   // under the card. Tokened, because the harness (and an impatient player) can
   // leave the step before the timer fires.
@@ -3271,11 +3369,12 @@ export class UI {
       return;
     }
     try { if (typeof G.setZoomLevel === 'function') G.setZoomLevel(0.1); } catch { /* ignore */ }
+    const end = this._camDemoWide();
     this._camDemoT = setTimeout(() => {
       this._camDemoT = 0;
       this._camDemoUnwatch();
       if (tok !== this._camDemoTok || !this._tutOpen) return;
-      try { if (typeof G.setZoomLevel === 'function') G.setZoomLevel(1); } catch { /* ignore */ }
+      try { if (typeof G.setZoomLevel === 'function') G.setZoomLevel(end); } catch { /* ignore */ }
     }, 850);
     // The same step says "TRY IT" and hands the pointer back, so a player who
     // rolls the wheel inside the 850ms window used to watch the game yank the
@@ -3451,6 +3550,9 @@ export class UI {
     void this.el.coachCard.offsetWidth;
     this.el.coachCard.style.animation = '';
     this._coachKey = '';
+    // A new step is a fresh argument about where the card belongs: the previous
+    // step's incumbent must not carry its head start across.
+    this._coachPick = -1;
     this._coachPlace();
   }
 
@@ -3490,8 +3592,13 @@ export class UI {
     // '.help' is in the list because the strip is now alive for the whole of
     // onboarding: the POWER card used to sit straight on top of it, clipping
     // "WHEEL ZOOM OUT" and hiding the SURVEY chip entirely.
+    // The desktop console's own readouts belong here too. Without them the
+    // untethered bottom-corner fallbacks looked free, so a card pushed off its
+    // tether landed squarely on ANGLE and the shot selector — the numbers an
+    // earlier step in the same deck taught the player to read.
     const sels = ['.camBar', '.helpBtn', '.help', '.aimC', '.moveC', '.wsel',
       '.fireBtn', '.fireCap', '.timerBox', '.pauseBtn', '.windPlate',
+      '.angleBox', '.powerBox', '.wingL', '.wingR',
       '.players.left', '.players.right'];
     const out = [];
     for (const s of sels) {
@@ -3502,7 +3609,58 @@ export class UI {
       const r = el.getBoundingClientRect();
       if (r.width > 4 && r.height > 4) out.push(r);
     }
+    // The two machines are furniture too. The old solver knew every button on
+    // the screen and nothing about where the match itself was, so the step
+    // titled SEE YOUR TARGET widened the lens to prove the rival was findable
+    // and then parked its own plaque on top of the rival — the original
+    // complaint, one layer up. Their screen rects are appended here, so the
+    // placement cost already sums them like any other thing not to cover.
+    for (const a of this._actorRects()) out.push(a);
     return out;
+  }
+
+  // Screen rects of the live mobiles, projected from the shared window.__GB
+  // hooks. The HUD never imports the renderer, so the projection is done by
+  // hand from the camera the rig publishes: the rig looks straight down -Z at
+  // a plane, which makes it two divisions. Every read is guarded — the HUD is
+  // never load-bearing, and a missing hook just means no actor rects.
+  _actorRects() {
+    const G = this._hooks();
+    try {
+      const w = G && G.world;
+      const cam = w && w.camera;
+      const list = G && G.mobiles;
+      if (!cam || !list || !list.length || !cam.position) return [];
+      const el = w.renderer && w.renderer.domElement;
+      const cr = el ? el.getBoundingClientRect() : null;
+      const VW = (cr && cr.width) || this.root.clientWidth || 1;
+      const VH = (cr && cr.height) || this.root.clientHeight || 1;
+      const VX = (cr && cr.left) || 0, VY = (cr && cr.top) || 0;
+      const out = [];
+      for (const m of list) {
+        if (!m || m.alive === false) continue;
+        const gz = (m.group && m.group.position && m.group.position.z) || 0;
+        const dist = cam.position.z - gz;
+        if (!(dist > 1)) continue;
+        const halfH = Math.tan(((cam.fov || 40) * Math.PI) / 360) * dist;
+        const halfW = halfH * (cam.aspect || VW / VH);
+        if (!(halfW > 0) || !(halfH > 0)) continue;
+        const cx = VX + ((m.x - cam.position.x) / halfW * 0.5 + 0.5) * VW;
+        const cy = VY + (0.5 - (m.y - cam.position.y) / halfH * 0.5) * VH;
+        // The body radius under-describes the silhouette: the barrel reaches up
+        // and the treads spread wide, and a plaque that clips either of them is
+        // still covering the target. Padded to the drawn shape, not the hitbox.
+        const rx = ((m.radius || 26) / halfW) * 0.5 * VW;
+        const ry = ((m.radius || 26) / halfH) * 0.5 * VH;
+        if (!Number.isFinite(cx) || !Number.isFinite(cy) || !(rx > 0)) continue;
+        out.push({
+          actor: true,
+          left: cx - rx * 2.0, right: cx + rx * 2.0,
+          top: cy - ry * 3.0, bottom: cy + ry * 1.8,
+        });
+      }
+      return out;
+    } catch { return []; }
   }
 
   _coachPlace() {
@@ -3539,16 +3697,34 @@ export class UI {
         { side: 'none', x: (W - cw) / 2, y: (H - ch) / 2, bias: 1100 },
       ];
       let best = null;
-      for (const c of cand) {
+      for (let ci = 0; ci < cand.length; ci++) {
+        const c = cand[ci];
         const x = Math.max(edge, Math.min(W - cw - edge, c.x));
         const y = Math.max(edge, Math.min(H - ch - edge, c.y));
         const rect = { left: x, top: y, right: x + cw, bottom: y + ch };
         // Covering the spotlight is four times worse than covering some other
         // control: the step is pointing at it.
         let cost = overlap(rect, spotR) * 4 + c.bias;
-        for (const k of clearRects) cost += overlap(rect, k);
-        if (!best || cost < best.cost) best = { cost, x, y, side: c.side };
+        for (const k of clearRects) {
+          const o = overlap(rect, k);
+          if (!o) continue;
+          // A covered control is still where the player left it; a covered
+          // MACHINE is the thing they are being told to look at. The flat term
+          // matters as much as the area one — the machines are small, so a
+          // pure area sum let a card clip a tank for less than it cost to
+          // brush the edge of the rail.
+          cost += k.actor ? o * 3 + 700 : o;
+        }
+        // Hysteresis. Two of the things this card dodges now MOVE — the camera
+        // step drives the lens while the card is up, so the machines slide
+        // across the frame under it. Without an incumbent's advantage the
+        // solver re-picks the instant two candidates cross by a pixel, and the
+        // plaque hops around the screen mid-sentence. The seat is kept unless
+        // something is clearly, not marginally, better.
+        if (ci === this._coachPick) cost -= 900;
+        if (!best || cost < best.cost) best = { cost, x, y, side: c.side, id: ci };
       }
+      this._coachPick = best.id;
       side = best.side; left = best.x; top = best.y;
       caret = (side === 'leftOf' || side === 'rightOf')
         ? Math.max(16, Math.min(ch - 16, cy - top))
