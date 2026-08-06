@@ -32,13 +32,18 @@ try {
   await page.waitForTimeout(1200);
   await page.keyboard.up('Space');
   await page.waitForTimeout(4000);
+  // Liveness, not speed. Under a loaded machine (parallel capture runs) software
+  // WebGL can drop to ~2fps, so wait for the frame count to climb rather than
+  // sampling once and calling a slow render a failure. JS errors are the real
+  // signal; this only proves the loop is still turning.
+  try {
+    await page.waitForFunction(() => window.__GB.framesRendered() > 14, { timeout: 25000 });
+  } catch { /* fall through to the sample below and report what we got */ }
   const state = await page.evaluate(() => ({
     frames: window.__GB.framesRendered(),
     state: window.__GB.game.state,
   }));
-  // Software WebGL in CI renders at only a few fps — a low bar is enough to
-  // prove the loop is alive; JS errors are the real signal.
-  ok = state.frames > 10;
+  ok = state.frames > 14;
   console.log(`frames=${state.frames} state=${state.state}`);
 } catch (e) {
   errors.push(`FATAL: ${e.message}`);

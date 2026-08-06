@@ -43,7 +43,14 @@ game.onImpactKick = (strength) => world.punch(strength);
 // Player camera control (see src/input.js and World's manual layer). The HUD
 // owns the readout and the "reset view" affordance; the rig only tells it where
 // the lens is and whether the player is driving.
-world.onZoom = (level, manual) => { if (ui.setZoom) ui.setZoom(level, manual); };
+// The third argument is additive: `sat` reports what the camera ACHIEVED
+// ({ atMax, atMin }), so the HUD can dim a stepper that has nothing left to
+// give instead of guessing from the requested level (the frustum clamp can stop
+// the lens short of 1.0, and a lit button that does nothing reads as broken).
+world.onZoom = (level, manual, sat) => { if (ui.setZoom) ui.setZoom(level, manual, sat); };
+// A zoom press that could not move the lens. Advisory only — the HUD turns it
+// into an at-limit cue so "nothing happened" is legible as a limit.
+world.onZoomLimit = (dir) => { if (ui.zoomLimit) ui.zoomLimit(dir); };
 
 // --- HUD-occupied screen edges ------------------------------------------------
 // The rig composes against the canvas, but on a phone the console permanently
@@ -93,8 +100,11 @@ function measureHudInsets() {
     if (r.bottom >= H * 0.8) ins.b = Math.max(ins.b, H - r.top);
   }
   // A pad of clear glass beyond the furniture itself: a mobile touching the
-  // edge of a button still reads as "behind the HUD".
-  const pad = 10;
+  // edge of a button still reads as "behind the HUD". Sized to cover the
+  // translucent plate a control sits on as well as its hit area — the plate is
+  // pass-through, so the loop above only ever sees the button inside it, and a
+  // tank half behind the plate is still a tank you cannot see.
+  const pad = 16;
   ins.l = ins.l ? Math.min(ins.l + pad, W * 0.3) : 0;
   ins.r = ins.r ? Math.min(ins.r + pad, W * 0.3) : 0;
   return ins;
@@ -221,4 +231,6 @@ window.__GB = {
   zoomTarget: () => world.zoomLevelTarget(),
   isSurveying: () => world.isSurveying(),
   safeInsets: () => world.safeInsets(),
+  // End-stop state as ACHIEVED by the camera: { atMax, atMin, level, target }.
+  zoomSaturation: () => world.zoomSaturation(),
 };

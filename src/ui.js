@@ -1647,11 +1647,15 @@ export class UI {
           right: var(--hud-gutter); top: 50%; transform: translateY(-50%);
           display: flex; flex-direction: column; align-items: center; gap: 9px;
         }
-        /* The rail's plate is inert; only its controls take the pointer, so a
-           mouse wheel over the rail still reaches the camera. */
+        /* The plate itself now TAKES the pointer and swallows anything that is
+           not a button (see _bindCamRail). It used to be inert, which left 4px
+           dead gutters between 20px-tall buttons: a tap that landed visually on
+           the rail fell through to the canvas, nudged the lens and raised the
+           RESET chip for something the player never pressed. The mouse wheel is
+           unaffected — input.js listens on window, and wheel events bubble. */
         #hud .camBar {
-          pointer-events: none;
-          display: flex; flex-direction: column; align-items: center; gap: 6px;
+          pointer-events: auto;
+          display: flex; flex-direction: column; align-items: center; gap: 8px;
           padding: 5px 8px 8px; border-radius: 16px;
           background: linear-gradient(180deg, #3b4d8f 0%, #232e5c 38%, #131a38 100%);
           border: 2px solid #e8b64a;
@@ -1660,12 +1664,17 @@ export class UI {
             inset 0 -7px 12px rgba(0,0,0,0.38),
             0 5px 16px rgba(0,0,0,0.55);
         }
-        #hud .camBar .miniLabel { letter-spacing: 2.2px; }
+        /* Captions and readouts are not targets: with the plate itself now
+           taking the pointer, anything that is not a .cbtn must stay out of the
+           way so a neighbouring button's hit slop reaches over it. */
+        #hud .camBar .miniLabel { letter-spacing: 2.2px; pointer-events: none; }
+        #hud .camVal { pointer-events: none; }
         /* Same filled-and-bevelled keycap kit as .shotBtn / .key: the rail must
            not introduce a fourth button idiom into the console language. */
         #hud .cbtn {
+          position: relative;
           pointer-events: auto; cursor: pointer;
-          width: 38px; height: 30px; border-radius: 8px;
+          width: 38px; height: 34px; border-radius: 8px;
           display: flex; align-items: center; justify-content: center;
           background: linear-gradient(#3b4a80, #1c2549 60%, #141b3d);
           border: 1px solid #0a0f22;
@@ -1674,6 +1683,17 @@ export class UI {
           text-shadow: 0 1px 2px #000; touch-action: manipulation;
           transition: filter 0.12s, transform 0.08s;
         }
+        /* Hit slop. The rail's buttons are small SHAPES by design — the console
+           language is keycaps, not 44px slabs — but the TARGET must clear the
+           44x44 floor regardless. The slop is exactly half the rail's 8px gap
+           on each side, so neighbouring targets tile the column edge to edge
+           and the dead gutter between two buttons no longer exists.
+           Pseudo-elements are not event targets of their own: a press inside
+           the slop is delivered to the .cbtn that owns it. */
+        #hud .cbtn::before {
+          content: ''; position: absolute; inset: -5px -6px; border-radius: 12px;
+        }
+        #hud .cbtn.wide::before { inset: -9px -6px; }
         #hud .cbtn:active {
           transform: translateY(1px); filter: brightness(1.35);
           box-shadow: inset 0 1px 0 rgba(255,255,255,0.28), 0 1px 0 rgba(0,0,0,0.6),
@@ -1686,7 +1706,7 @@ export class UI {
            of the two by being FILLED rather than by being the only one with
            any chrome at all. */
         #hud .cbtn.wide {
-          width: 38px; height: 22px; font-size: 9px; letter-spacing: 0.10em;
+          width: 38px; height: 26px; font-size: 10px; letter-spacing: 0.10em;
           color: #ffe7a0;
           background: linear-gradient(#46589b, #232e5f 58%, #182050);
           border: 1px solid #6b4a12;
@@ -1694,28 +1714,64 @@ export class UI {
         }
         /* An exhausted stepper must look exhausted: pressing "-" at maximum
            zoom-out used to leave a full trough sitting still, which reads as a
-           broken game rather than as a limit. */
-        #hud .cbtn.dim { opacity: 0.4; pointer-events: none; filter: saturate(0.5); }
-        /* How wide is the view? A trough that fills from the bottom — the same
-           read as the power gauge, so the player already knows how to read it. */
+           broken game rather than as a limit. At 0.4 opacity a dimmed "−" still
+           read as a live button at a glance, so the spent state now also loses
+           its colour — nothing else in this HUD is grey. */
+        /* Still pressable: a press at the limit is how the player ASKS whether
+           there is more, and it has to be answered (a bump plus one line of
+           text, see _railDead) rather than swallowed. */
+        #hud .cbtn.dim {
+          opacity: 0.3;
+          filter: grayscale(1) saturate(0.2) brightness(0.9);
+        }
+        #hud .cbtn.dim:active { transform: none; filter: grayscale(1) brightness(1.1); }
+        /* How wide is the view? A GAUGE, not a third button. It used to wear the
+           +/− keycap's own bevel, border and radius with two dark bars through
+           it, so the one element on the rail that is a readout read as a
+           hamburger menu. Now: a sunken trough with a visible unfilled
+           remainder, hairline travel ticks, and no bevel of its own. */
         #hud .camGauge {
-          position: relative; width: 38px; height: 42px; border-radius: 7px;
-          background: linear-gradient(#0a1230, #121a40 70%, #1a2a55);
-          border: 2px solid #0a0f22; overflow: hidden;
-          box-shadow: inset 0 3px 7px rgba(0,0,0,0.85), 0 1px 0 rgba(255,255,255,0.18);
+          position: relative; width: 38px; height: 46px; border-radius: 4px;
+          pointer-events: none;
+          background: rgba(6,12,40,0.88);
+          border: 2px solid rgba(255,215,94,0.35); overflow: hidden;
+          box-shadow: inset 0 2px 6px rgba(0,0,20,0.7);
         }
         #hud .camFill {
-          position: absolute; left: 0; right: 0; bottom: 0; height: 10%;
+          position: absolute; left: 1px; right: 1px; bottom: 1px; height: 6%;
+          border-radius: 2px;
           background: linear-gradient(180deg, #fff0b0, #ffd75e 45%, #d59b1f);
           box-shadow: inset 0 1px 0 rgba(255,255,255,0.65), 0 0 9px rgba(255,215,94,0.5);
           transition: height 0.18s ease-out;
         }
+        /* three hairlines, so 0.75 and 1.00 are not ten pixels of gold on gold */
         #hud .camTicks {
-          position: absolute; inset: 2px 3px; pointer-events: none;
+          position: absolute; inset: 0; pointer-events: none;
           background: linear-gradient(180deg,
-            transparent 0 calc(33% - 1px), rgba(8,12,32,0.75) calc(33% - 1px) calc(33% + 1px),
-            transparent calc(33% + 1px) calc(66% - 1px), rgba(8,12,32,0.75) calc(66% - 1px) calc(66% + 1px),
-            transparent calc(66% + 1px));
+            transparent 0 calc(25% - 1px), rgba(255,231,160,0.34) calc(25% - 1px) calc(25% + 1px),
+            transparent calc(25% + 1px) calc(50% - 1px), rgba(255,231,160,0.34) calc(50% - 1px) calc(50% + 1px),
+            transparent calc(50% + 1px) calc(75% - 1px), rgba(255,231,160,0.34) calc(75% - 1px) calc(75% + 1px),
+            transparent calc(75% + 1px));
+        }
+        /* Where the game's OWN framing sits on the travel: the fill is drawn
+           relative to it, so an untouched camera rests just above this line and
+           everything above it is view the player asked for. Team blue, the
+           colour the console already uses for "this is yours". */
+        #hud .camAuto {
+          position: absolute; left: -2px; right: -2px; height: 2px; bottom: 20%;
+          background: #59c1ff; opacity: 0.9; pointer-events: none;
+          box-shadow: 0 0 5px rgba(89,193,255,0.85);
+        }
+        /* dead input at the limit: a 180ms nudge, so "nothing happened" is
+           still an ANSWER rather than a frozen screen */
+        #hud .camBar.bump { animation: railBump 0.18s ease-out; }
+        @keyframes railBump { 50% { transform: translateY(3px); } }
+        /* one-shot ring for the player who skipped onboarding and has never
+           been introduced to this column (see _railIntro) */
+        #hud .camBar.intro { animation: railIntro 0.9s ease-out 3; }
+        @keyframes railIntro {
+          0%   { box-shadow: 0 0 0 2px #6b4a12, 0 0 0 0 rgba(255,215,94,0.85); }
+          100% { box-shadow: 0 0 0 2px #6b4a12, 0 0 0 18px rgba(255,215,94,0); }
         }
         /* the numeral slot: one word, in the gold display family */
         #hud .camVal {
@@ -1727,8 +1783,8 @@ export class UI {
         /* RESET VIEW: reserved slot, so the buttons above it never move under
            the thumb when manual control toggles. */
         #hud .cbtn.cReset {
-          height: 28px; padding: 0 1px; line-height: 1.05; text-align: center;
-          white-space: normal; letter-spacing: 0.02em; font-size: 8.5px;
+          height: 26px; padding: 0 1px; line-height: 1.05; text-align: center;
+          white-space: nowrap; letter-spacing: 0.02em; font-size: 10px;
           background: linear-gradient(#ffe9a0, #ffd75e 55%, #d59b1f);
           border-color: #6b4a12; color: #402c05; letter-spacing: 0.06em;
           text-shadow: 0 1px 0 rgba(255,255,255,0.5);
@@ -1778,7 +1834,7 @@ export class UI {
         /* caption for the "?" — same small-caps rail language as VIEW */
         #hud .helpCap {
           margin-top: -5px;
-          font-size: 9px; font-weight: 800; letter-spacing: 2.2px;
+          font-size: 10px; font-weight: 800; letter-spacing: 2.2px;
           color: #ffe7a0; text-shadow: 0 1px 2px #000; white-space: nowrap;
         }
         /* the "it's recoverable" plaque, parked under the "?" it points at */
@@ -1916,6 +1972,15 @@ export class UI {
             0 0 10px rgba(255,215,94,0.35);
         }
         #hud .cSkip:active, #hud .cNext:active { transform: translateY(1px); }
+        /* The gate's escape hatch, six seconds in. It used to reappear as the
+           IDENTICAL gold "NEXT ▶" the player has already pressed three times,
+           so the one control this whole lesson exists to teach could be skipped
+           by reflex. A bail-out has to LOOK like a bail-out. */
+        #hud .cNext.secondary {
+          background: none; border: 1px solid rgba(255,215,94,0.45);
+          color: rgba(255,231,160,0.78); font-weight: 700;
+          text-shadow: 0 1px 2px #000; box-shadow: none;
+        }
         /* "anywhere works": the advance affordance, stated once, quietly */
         #hud .cTapHint {
           margin-top: 7px; text-align: center;
@@ -1955,8 +2020,15 @@ export class UI {
            can actually reach the control the step is about (the spotlighted
            FIRE button on touch, the pinch gesture on the camera step). The
            card's own buttons stay live either way. */
+        /* coachTry is the same idea for a step that asks the player to press a
+           real HUD button: the scrim stops swallowing the tap it just told them
+           to make. Without it, step 3 rang the AIM pad, said "tap it", and then
+           ate the tap and advanced — the lesson ran away from the player doing
+           exactly as instructed. */
         #hud.coachGate .coach.on,
+        #hud.coachTry .coach.on,
         #hud.coachCam .coach.on { pointer-events: none; }
+        #hud.coachTry .coachCard, #hud.coachCam .coachCard { pointer-events: auto; }
         #hud.coachGate .coachSpot {
           box-shadow:
             0 0 0 3px #ffd75e,
@@ -1970,52 +2042,82 @@ export class UI {
           #hud .coachCard { width: 320px; padding: 9px 12px 10px; }
           #hud .cBody { font-size: 14px; }
         }
-        /* Phone landscape: the rail hangs from the top band (the bottom-right
-           corner belongs to FIRE and its charge cap), and the "?" moves up
-           beside PAUSE where the top strip already lives. */
+        /* ===== Phone landscape: the tightest layout in the product =====
+           Measured furniture at 844x390 that the view rail has to live between:
+             .players.right  y 5..58   (top-right HP card)
+             .aimC           x 690..752, y 215..380
+             .fireCap        y 267..300, x 758..834
+             .fireBtn        y 304..380, x 758..834
+           That leaves the rail exactly one column, x 772..834 and y 62..265 —
+           203px for seven rows. Every control in it still clears the 44x44
+           touch floor, because the TARGET is the button plus its hit slop
+           (.cbtn::before), not the painted keycap: the console's visual
+           language is keycaps, and inflating them to 44px slabs would have
+           made the rail the loudest object on a 390px-tall screen. */
         @media (max-height: 500px) {
           #hud .rightRail {
-            top: calc(52px + env(safe-area-inset-top, 0px));
-            right: calc(6px + env(safe-area-inset-right, 0px));
+            top: calc(62px + env(safe-area-inset-top, 0px));
+            right: calc(10px + env(safe-area-inset-right, 0px));
             transform: none; gap: 0;
           }
-          #hud .camBar { gap: 4px; padding: 4px 7px 6px; border-radius: 14px; }
-          #hud .cbtn { width: 34px; height: 28px; font-size: 18px; }
-          #hud .cbtn.wide { width: 34px; height: 20px; font-size: 8px; }
-          #hud .cbtn.cReset { height: 26px; font-size: 7.5px; }
-          #hud .camGauge { width: 34px; height: 30px; }
-          #hud .camVal { font-size: 12px; height: 13px; line-height: 13px; }
+          #hud .camBar { gap: 2px; padding: 4px 6px 6px; border-radius: 14px; }
+          #hud .cbtn { width: 46px; height: 34px; font-size: 19px; }
+          #hud .cbtn::before { inset: -5px -7px; }        /* target 60x44 */
+          #hud .cbtn.wide {
+            width: 46px; height: 30px; font-size: 11px; letter-spacing: 0.03em;
+          }
+          #hud .cbtn.wide::before { inset: -7px -7px; }   /* target 60x44 */
+          #hud .cbtn.cReset { height: 30px; font-size: 11px; }
+          #hud .camGauge { width: 46px; height: 24px; }
+          #hud .camVal { font-size: 11px; height: 12px; line-height: 12px; }
           /* display:block re-states what this layout's blanket miniLabel
              display:none takes away: the rail's caption is the only thing
              naming this column, so it survives the compact layout even though
-             the console's own captions do not. */
+             the console's own captions do not. 11px is the floor — at 9px the
+             one word identifying the whole column was unresolvable at arm's
+             length, and step 6 of onboarding names these controls by label. */
           #hud .camBar .miniLabel {
-            display: block; font-size: 9px; letter-spacing: 1.6px;
+            display: block; font-size: 11px; letter-spacing: 1.2px;
             height: 11px; line-height: 11px;
           }
-          /* "?" joins the top strip next to PAUSE (which is 40px at right:196) */
+          /* The "?" cannot fit in the rail on a 390px-tall screen (see the
+             budget above), and its old home — 34px pinned to y=5 at mid-screen
+             — demanded a two-handed re-grip for the one control that teaches
+             the game. It joins the BOTTOM control row instead, beside SHOT and
+             MOVE, at a full 44x44: same band as every other thing a thumb
+             presses, and low enough that it costs the camera no framing width
+             (the composition only counts furniture in the middle of the
+             screen, see main.js measureHudInsets). */
           #hud .helpBtn {
-            position: fixed; z-index: 9; width: 34px; height: 34px; font-size: 18px;
-            top: calc(5px + env(safe-area-inset-top, 0px));
-            right: calc(244px + env(safe-area-inset-right, 0px));
+            position: fixed; z-index: 9; width: 44px; height: 44px; font-size: 22px;
+            top: auto;
+            left: calc(334px + env(safe-area-inset-left, 0px));
+            bottom: calc(12px + env(safe-area-inset-bottom, 0px));
           }
-          /* Narrow enough to sit BESIDE the 52px view rail instead of on top
+          /* Narrow enough to sit BESIDE the view rail instead of on top
              of it: at 300px there was no x where the card cleared both the
              control it points at and the rail full of controls it does not. */
           #hud .coachCard { width: 264px; padding: 8px 11px 9px; border-radius: 12px; }
           #hud .cBody { font-size: 13px; line-height: 1.3; }
           #hud .cKicker { font-size: 9px; letter-spacing: 1.8px; }
           #hud .coachCard.title .cKicker { font-size: 22px; letter-spacing: 1.2px; }
-          #hud .cFoot { margin-top: 7px; }
-          #hud .cSkip, #hud .cNext { height: 26px; padding: 0 10px; font-size: 11px; }
-          #hud .cTapHint { margin-top: 5px; font-size: 9px; }
-          /* the "?" is fixed up in the top strip on this layout, so its caption
-             follows it there rather than being orphaned in the rail */
+          /* The two most-tapped buttons in onboarding were 26px tall and 8px
+             apart, with the irreversible one (SKIP) sitting where a thumb aims
+             for the safe one. Both are now 40px, 20px apart, and SKIP loses
+             its keycap: weight matches consequence. */
+          #hud .cFoot { margin-top: 8px; gap: 20px; }
+          #hud .cSkip, #hud .cNext { height: 40px; padding: 0 16px; font-size: 12px; }
+          #hud .cSkip {
+            background: none; border: none; box-shadow: none;
+            color: rgba(255,231,160,0.75); padding: 0 10px;
+          }
+          #hud .cTapHint { margin-top: 6px; font-size: 11px; }
           #hud .helpCap {
-            position: fixed; z-index: 9; margin: 0; width: 34px; text-align: center;
-            font-size: 8px; letter-spacing: 1.4px;
-            top: calc(40px + env(safe-area-inset-top, 0px));
-            right: calc(244px + env(safe-area-inset-right, 0px));
+            position: fixed; z-index: 9; margin: 0; width: 44px; text-align: center;
+            font-size: 11px; letter-spacing: 1.2px;
+            top: auto;
+            left: calc(334px + env(safe-area-inset-left, 0px));
+            bottom: calc(58px + env(safe-area-inset-bottom, 0px));
           }
         }
       </style>
@@ -2200,14 +2302,20 @@ export class UI {
           <span class="miniLabel">VIEW</span>
           <div class="cbtn cIn" role="button" aria-label="Zoom in"
             title="Zoom in (tighter view)">&#43;</div>
-          <div class="camGauge"><i class="camFill"></i><i class="camTicks"></i></div>
+          <div class="camGauge">
+            <i class="camFill"></i><i class="camTicks"></i><i class="camAuto"></i>
+          </div>
           <div class="cbtn cOut" role="button" aria-label="Zoom out"
             title="Zoom out (wider view)">&#8722;</div>
           <div class="camVal">AIM</div>
           <div class="cbtn wide cSurvey" role="button" aria-label="Survey the battlefield"
-            title="Frame both mobiles">SURVEY</div>
+            title="Frame you and the rival">SURVEY</div>
+          <!-- "RESET", not "RESET VIEW": it sits under the rail's own VIEW
+               caption, so the column already reads "VIEW … RESET", and the
+               shorter word fits on one line at a legible size instead of two
+               lines at 7.5px. Onboarding step 6 names it by this label. -->
           <div class="cbtn wide cReset" role="button" aria-label="Reset the view"
-            title="Back to the automatic camera">RESET VIEW</div>
+            title="Back to the automatic camera">RESET</div>
         </div>
       </div>
 
@@ -2366,14 +2474,28 @@ export class UI {
       if (h) h.textContent = this.isTouch ? 'HOLD FIRE TO CHARGE' : 'HOLD SPACE TO CHARGE';
     }
 
-    // Control hint retires itself after ~6s even if the player never fires.
+    // Control hint retires itself after a while even if the player never fires.
     // Frame-counted (not wall clock) so fixed-dt capture runs behave the same.
+    //
+    // The counter must only run while the player CAN act on what it says. It
+    // used to start at page load and keep running underneath the seven-step
+    // onboarding modal, so the ~6s budget was long gone before a stranger —
+    // who spends 30-60s reading — ever got control. The strip naming the zoom
+    // gesture was therefore, for every real first-time player, never on screen
+    // at all. Now: frozen while the coach is up, restarted from zero when it
+    // closes (endTutorial), and generous enough (900 frames ~ 15s) to be read
+    // during actual play. It still retires for good on the first shot.
+    this._helpFrames = 0;
     {
-      let n = 0;
       const step = () => {
         if (this._helpGone) return;
-        if (++n >= 360) { this._helpGone = true; this.el.help.classList.add('gone'); }
-        else requestAnimationFrame(step);
+        // Paused, not merely slowed: a modal the player is reading is not time
+        // spent with the hint.
+        if (this._tutOpen) { requestAnimationFrame(step); return; }
+        if (++this._helpFrames >= 900) {
+          this._helpGone = true;
+          this.el.help.classList.add('gone');
+        } else requestAnimationFrame(step);
       };
       requestAnimationFrame(step);
     }
@@ -2386,6 +2508,7 @@ export class UI {
     // Callback slot fired when onboarding closes (assignable by game code).
     this.onTutorialEnd = null;
     this._zoom = -1;           // last level handed to setZoom (0 tight .. 1 wide)
+    this._zoomKey = '';        // last painted indicator state (skips redundant writes)
     this._zoomManual = false;  // player has taken the camera off automatic
     this._tutOpen = false;
     this._tutStep = 0;
@@ -2408,6 +2531,13 @@ export class UI {
     this._gateT = 0;
     this._camDemoT = 0;
     this._camDemoTok = 0;
+    this._camDemoWatch = null;  // "player grabbed the camera" listeners, while a demo is pending
+    this._windDemoRaf = 0;
+    this._windDemoTok = 0;
+    this._windDemoOn = false;
+    this._windReal = null;
+    this._tutShownMax = 0;      // furthest step reached this run (for the skip-at-step-1 net)
+    this._autoLevel = 0;        // zoom level of the game's OWN framing (gauge origin)
     this._toastT = 0;
     this._steps = this._buildSteps();
     this._bindCamRail();
@@ -2433,41 +2563,113 @@ export class UI {
      ui.setZoom(level, manual) is the contract the camera rig calls every time
      the framing changes: level 0 = tightest, 1 = widest, manual = the player
      has taken control (which is what raises RESET VIEW). */
-  setZoom(level, manual) {
+  // `flags` is optional and additive: the rig may report { atMax, atMin } when
+  // the lens has saturated. When it does not, the HUD works it out itself from
+  // the rig's zoom TARGET (see _camSat) — the level the rig reports is the
+  // smoothed, view-clamped position, which on a phone tops out around 0.96 and
+  // therefore never crossed a 0.995 literal, leaving a fully lit stepper that
+  // did nothing for three presses running.
+  setZoom(level, manual, flags) {
     const t = Math.max(0, Math.min(1, Number(level) || 0));
     const man = !!manual;
-    if (t === this._zoom && man === this._zoomManual) return;
+    // The game's own framing is the origin the gauge is drawn from, so it has
+    // to be learned from the automatic reports.
+    if (!man) this._autoLevel = t;
+    const sat = this._camSat(flags);
+    const key = `${t}|${man}|${sat.atMax}|${sat.atMin}|${this._autoLevel}`;
+    if (key === this._zoomKey) return;
+    this._zoomKey = key;
     this._zoom = t;
     this._zoomManual = man;
-    if (this.el.camFill) this.el.camFill.style.height = `${(9 + t * 91).toFixed(1)}%`;
+
+    // Remap the travel so the gauge measures what the player can actually
+    // change. Drawn raw, the rest position on a phone was 78% full and read
+    // "WIDE" before a finger had touched anything: the only two words that
+    // device would ever show were WIDE and MAX, across a nearly-full trough.
+    // The automatic framing is pinned to a fixed 20% mark (drawn as the blue
+    // .camAuto line), everything above it is view the player asked for, and
+    // everything below it is the push-in.
+    const a = Math.max(0, Math.min(0.98, this._autoLevel || 0));
+    const u = t <= a
+      ? (a > 0.001 ? (t / a) * 0.20 : 0.20)
+      : 0.20 + ((t - a) / (1 - a)) * 0.80;
+    if (this.el.camFill) this.el.camFill.style.height = `${(4 + u * 96).toFixed(1)}%`;
+
     // A word, not a fake magnification factor: the rig's zoom curve is its own
-    // business, and "2.4x" of nothing in particular would be a lie.
-    const word = t < 0.06 ? 'AIM' : t < 0.34 ? 'CLOSE' : t < 0.62 ? 'MID'
-      : t < 0.9 ? 'WIDE' : 'MAX';
+    // business, and "2.4x" of nothing in particular would be a lie. The ladder
+    // is read off the remapped travel, so the resting frame lands mid-scale
+    // with bands visibly still above it instead of announcing "WIDE" at the
+    // exact framing that generated the complaint. Saturation always wins: at
+    // the limit the word is the limit.
+    const word = sat.atMax ? 'MAX'
+      : sat.atMin ? 'AIM'
+      : u < 0.07 ? 'AIM'
+      : u < 0.15 ? 'CLOSE'
+      : u < 0.30 ? 'NORMAL'
+      : u < 0.55 ? 'WIDE'
+      : u < 0.85 ? 'WIDER' : 'MAX';
     if (this.el.camVal && this.el.camVal.textContent !== word)
       this.el.camVal.textContent = word;
     if (this.el.camBar) this.el.camBar.classList.toggle('manual', man);
     // A stepper with nothing left to give goes dead-looking. Pressing "-" at
     // the widest legal lens moves nothing; an undimmed button that does
     // nothing reads as a broken game, not as a limit.
-    if (this.el.camOut) this.el.camOut.classList.toggle('dim', t >= 0.995);
-    if (this.el.camIn) this.el.camIn.classList.toggle('dim', t <= 0.005);
+    if (this.el.camOut) this.el.camOut.classList.toggle('dim', sat.atMax);
+    if (this.el.camIn) this.el.camIn.classList.toggle('dim', sat.atMin);
+  }
+
+  // Has the lens run out of travel? Prefers whatever the rig reports; otherwise
+  // asks for the zoom TARGET, which saturates at 1 even when the achieved level
+  // is held short of it by the view clamp.
+  _camSat(flags) {
+    if (flags && (typeof flags.atMax === 'boolean' || typeof flags.atMin === 'boolean')) {
+      return { atMax: !!flags.atMax, atMin: !!flags.atMin };
+    }
+    const tgt = this._camTargetLevel();
+    return { atMax: tgt >= 0.995, atMin: tgt <= 0.005 };
+  }
+
+  _camTargetLevel() {
+    const G = this._hooks();
+    try {
+      if (G && typeof G.zoomTarget === 'function') {
+        const v = Number(G.zoomTarget());
+        if (Number.isFinite(v)) return v;
+      }
+    } catch { /* the HUD is never load-bearing */ }
+    return this._zoom;
   }
 
   // Current zoom level as the HUD understands it (0..1). Additive helper.
   zoomIndicator() { return this._zoom; }
 
+  // Where the automatic framing sits on the gauge (0..1). Additive helper.
+  autoZoomLevel() { return this._autoLevel; }
+
   // SURVEY / RESET VIEW, also reachable from the hint strip. Both drive the
   // camera through the shared window.__GB hooks and then mirror the result, so
   // the indicator is right even if the rig does not call back.
   cameraSurvey() {
+    this._camDemoAbort();
     const G = this._hooks();
+    const before = this._camTargetLevel();
     if (G && typeof G.survey === 'function') G.survey();
+    const after = this._camTargetLevel();
     const lv = G && typeof G.zoomLevel === 'function' ? G.zoomLevel() : 1;
+    // A press that changed nothing must not be reported as the player taking
+    // the camera: latching manual mode raises a pulsing RESET chip, which tells
+    // a stranger they broke something when in fact nothing happened. (The rig
+    // owns the other half of this — see the note in the final report.)
+    if (Math.abs(after - before) < 0.02) {
+      this.setZoom(lv, this._zoomManual);
+      this._railDead('ALREADY FRAMING BOTH');
+      return;
+    }
     this.setZoom(lv, true);
   }
 
   cameraReset() {
+    this._camDemoAbort();
     const G = this._hooks();
     if (G && typeof G.resetCamera === 'function') G.resetCamera();
     const lv = G && typeof G.zoomLevel === 'function' ? G.zoomLevel() : 0;
@@ -2478,11 +2680,41 @@ export class UI {
 
   // dir -1 = tighter, +1 = wider.
   _camStep(dir) {
+    this._camDemoAbort();
     const G = this._hooks();
-    const cur = G && typeof G.zoomLevel === 'function' ? G.zoomLevel() : this._zoom;
+    const before = this._camTargetLevel();
+    const cur = G && typeof G.zoomTarget === 'function' ? G.zoomTarget()
+      : (G && typeof G.zoomLevel === 'function' ? G.zoomLevel() : this._zoom);
     const t = Math.max(0, Math.min(1, (Number(cur) || 0) + dir * ZOOM_STEP));
     if (G && typeof G.setZoomLevel === 'function') G.setZoomLevel(t);
+    const after = this._camTargetLevel();
+    // Nothing moved. A stepper that keeps accepting presses at the limit is the
+    // frozen-screen failure: the player rolls, rolls again, and the picture is
+    // identical with no cue that they have arrived anywhere.
+    if (Math.abs(after - before) < 0.002) {
+      this._zoomKey = '';
+      this.setZoom(Math.max(0, this._zoom), this._zoomManual);
+      this._railDead(dir > 0
+        ? 'WIDEST VIEW — RESET HANDS THE CAMERA BACK'
+        : 'CLOSEST VIEW');
+      return;
+    }
     this.setZoom(t, true);
+  }
+
+  // Dead input at a limit: nudge the rail and say so once. Silence here is what
+  // made a clamped camera read as a broken one.
+  _railDead(msg) {
+    const bar = this.el.camBar;
+    if (bar) {
+      bar.classList.remove('bump');
+      void bar.offsetWidth;
+      bar.classList.add('bump');
+      clearTimeout(this._bumpT);
+      this._bumpT = setTimeout(() => bar.classList.remove('bump'), 260);
+    }
+    // Not while the coach owns the screen: its own card is the message there.
+    if (!this._tutOpen && msg) this._toastAt(bar, msg, 1800);
   }
 
   _bindCamRail() {
@@ -2497,9 +2729,57 @@ export class UI {
     tap(this.root.querySelector('.cOut'), () => this._camStep(1));
     tap(this.root.querySelector('.cSurvey'), () => this.cameraSurvey());
     tap(this.root.querySelector('.cReset'), () => this.cameraReset());
+    // The plate takes the pointer now (see the CSS note) so no tap can slip
+    // between two buttons and reach the canvas. Anything that is not a button
+    // is swallowed here; the wheel still reaches the camera, because input.js
+    // listens on window and wheel events bubble out of the HUD.
+    const bar = this.el.camBar;
+    if (bar) {
+      bar.addEventListener('pointerdown', (e) => {
+        if (e.target && e.target.closest && e.target.closest('.cbtn')) return;
+        e.preventDefault(); e.stopPropagation();
+      });
+      bar.addEventListener('contextmenu', (e) => e.preventDefault());
+    }
     // The hint strip's SURVEY chip is a live control, not a caption: a player
     // who skips onboarding still meets the feature.
     tap(this.root.querySelector('.hSurvey'), () => this.cameraSurvey());
+    // The rail's own steppers are not the only way to hit the limit: the wheel
+    // and the pinch get there faster, and input.js has no idea the HUD exists.
+    // Watch them here (passively — nothing is prevented, nothing is consumed)
+    // so an exhausted lens answers whichever gesture asked.
+    {
+      let last = 0;
+      const atLimit = (wider) => {
+        const t = this._camTargetLevel();
+        return wider ? t >= 0.995 : t <= 0.005;
+      };
+      const check = (wider) => {
+        const now = Date.now();
+        if (now - last < 1400) return;
+        if (!atLimit(wider)) return;
+        last = now;
+        this._railDead(wider ? 'WIDEST VIEW — RESET HANDS THE CAMERA BACK' : 'CLOSEST VIEW');
+      };
+      window.addEventListener('wheel', (e) => {
+        if (!e.deltaY) return;
+        check(e.deltaY > 0);
+      }, { passive: true });
+      // Pinch: only the "spread further" direction is worth a message, and only
+      // once the fingers have actually moved a real distance.
+      let pinch0 = 0;
+      const dist = (tl) => Math.hypot(tl[0].clientX - tl[1].clientX, tl[0].clientY - tl[1].clientY);
+      window.addEventListener('touchstart', (e) => {
+        pinch0 = e.touches && e.touches.length > 1 ? dist(e.touches) : 0;
+      }, { passive: true });
+      window.addEventListener('touchmove', (e) => {
+        if (!pinch0 || !e.touches || e.touches.length < 2) return;
+        const d = dist(e.touches);
+        if (Math.abs(d - pinch0) < 24) return;
+        check(d < pinch0);   // fingers together = pull back = wider
+      }, { passive: true });
+      window.addEventListener('touchend', () => { pinch0 = 0; }, { passive: true });
+    }
     // The strip names the gesture the player actually has: wheel + TAB on a
     // desktop (see src/input.js), pinch + the SURVEY chip itself on touch.
     const zk = this.root.querySelector('.hZoomKey');
@@ -2522,6 +2802,7 @@ export class UI {
     this._tutOpen = true;
     this._tutStep = 0;
     this._tutShown = -1;
+    this._tutShownMax = 0;
     this._coachKey = '';
     this._held.clear();
     this._holdAcc = 0;
@@ -2570,6 +2851,12 @@ export class UI {
     // over (a full turn, on a first run), camera back on automatic.
     this._thawGame();
     this._camDemo(false);
+    this._windDemo(false);
+    // The hint strip gets its full budget of ACTUAL play, starting now. Reading
+    // onboarding is not time spent with the hint (see the counter in the
+    // constructor), and the strip is the only persistent text that names the
+    // zoom gesture on this layout.
+    this._helpFrames = 0;
     if (completed) { this._tutSeen = true; this._markOnboarded(); }
     // Whatever the coach swallowed gets its moment now.
     if (this._tutBanner) {
@@ -2578,6 +2865,18 @@ export class UI {
       this.banner(text, ms);
     } else {
       this._bannerPop(1200);
+    }
+    // "The lesson is replayable" used to be told ONLY to the player who hit
+    // SKIP. The player who read all seven steps — the one most likely to want
+    // to re-check the charge step mid-match — was told nothing, and the "?" is
+    // a 30px glyph in the corner. Both exits say it now.
+    if (completed) {
+      this._toast(this.isTouch
+        ? 'TAP ? ANY TIME FOR THE BASICS' : 'PRESS ? ANY TIME FOR THE BASICS');
+      // A player who bailed on step 1 has never met the camera controls, and on
+      // phone landscape the hint strip that would otherwise introduce them is
+      // display:none. Ring the rail once, ever.
+      if (this._tutShownMax <= 0) this._railIntro();
     }
     const cb = this.onTutorialEnd;
     if (typeof cb === 'function') {
@@ -2675,22 +2974,37 @@ export class UI {
       // Identity and objective first. A stranger's first frame used to be a
       // card headed "WHOSE TURN — 1 / 6" over a match already in progress; the
       // game never said its own name or what winning meant.
+      //
+      // {N} is substituted in _renderStep from the deck's own length. The copy
+      // used to hard-code "Six quick steps" next to a counter reading "2 / 7"
+      // and seven dots: the first sentence the product speaks cannot be the
+      // first thing it gets wrong, and a literal will drift again the next time
+      // a step is added.
       {
         kicker: 'THUNDERBOUND',
         title: true,
         sel: [],
-        text: 'A turn-based artillery duel. You and the rival lob shells across the map &mdash; first to empty the other&rsquo;s HP bar wins. Six quick steps, or hit <b>SKIP</b>. The clock is paused while we talk.',
+        text: 'A turn-based artillery duel. You and the rival lob shells across the map &mdash; first to empty the other&rsquo;s HP bar wins. {N} quick steps, or hit <b>SKIP</b>. The clock is paused while we talk.',
       },
+      // "You are the mobile on the left" — "mobile" is GunBound's word for the
+      // vehicle and a stranger reads it as "phone". Never used in player-facing
+      // copy again; the two combatants are "you" and "the rival".
       {
         kicker: 'WHOSE TURN',
         sel: ['.players.left .pcard', '.players.left'],
-        text: 'You are the mobile on the <b>left</b> &mdash; the glowing card is whoever is up, and you win by emptying the rival&rsquo;s HP bar first.',
+        text: 'You are the blue machine on the <b>left</b>, on the card marked <b>YOU</b> &mdash; the glowing card is whoever is up, and you win by emptying the rival&rsquo;s HP bar first.',
       },
+      // `try` hands the tap back. The step rings the AIM pad and says "tap it";
+      // the scrim used to swallow that tap and advance instead, so a player
+      // doing exactly as told watched the barrel not move and the lesson run
+      // away from them. (Desktop never had the bug — arrow keys already pass
+      // through — so it keeps click-to-advance.)
       {
         kicker: 'ANGLE',
+        try: touch,
         sel: ['.angleBox', '.aimC', '.angleChip'],
         text: touch
-          ? 'Tap <b>&#9652;</b> / <b>&#9662;</b> on the AIM pad to tilt your barrel &mdash; this readout is the launch angle in degrees.'
+          ? 'Tap <b>&#9652;</b> / <b>&#9662;</b> on the AIM pad to tilt your barrel &mdash; this readout is the launch angle in degrees. Go on, try it.'
           : 'Hold <b>&#8593;</b> / <b>&#8595;</b> to tilt your barrel &mdash; this readout is the launch angle in degrees (<b>&#8592;</b> / <b>&#8594;</b> walks you along the ground).',
       },
       // The least obvious control in the genre, and the whole reason onboarding
@@ -2705,28 +3019,45 @@ export class UI {
           ? 'Power is a <b>hold</b>. Try it now: press and hold <b>FIRE</b> and watch the ring charge, then let go. This one is practice &mdash; nothing is fired.'
           : 'Power is a <b>hold</b>. Try it now: hold <b>SPACE</b> and watch this gauge fill, then release. This one is practice &mdash; nothing is fired.',
       },
+      // The vane is spotlighted while it reads "1 m/s" with a near-horizontal
+      // arrow: a lesson about a force, demonstrated on a value at which the
+      // force is invisible. `wind` runs the HUD dial up to a gale and back so
+      // the player sees what a big number looks like. HUD-only — no game state
+      // is touched, and the real value is restored on the way out.
       {
         kicker: 'WIND',
+        wind: true,
         sel: ['.windPlate', '.windWrap'],
-        text: 'The wind blows your shell sideways for its whole flight &mdash; the arrow is which way, the number is how hard, so aim into it.',
+        text: 'The wind blows your shell sideways for its whole flight &mdash; the arrow is which way, the number is how hard, so aim into it. Watch: at <b>1</b> it barely bends, past about <b>5</b> it will miss for you.',
       },
       // Demonstrate, do not assert. "Can't see the rival?" was asked over a
       // wide establishing shot with the rival plainly in frame, which reads as
       // "this feature is not for you". The step now pushes the lens in to the
       // aiming framing and pulls it back out under the card, so the player
       // watches the thing the words are about.
+      // State-neutral: the old copy opened "Aiming pushes in tight", which is a
+      // promise about a problem the player may not be having — the framing they
+      // are handed back is wide, with both combatants plainly in shot. A
+      // stranger reads an assertion that does not match their screen as "this
+      // feature is not for me", which is the exact failure the feature exists
+      // to prevent. Offer the control; do not diagnose.
       {
         kicker: 'SEE YOUR TARGET',
         cam: true,
         sel: ['.camBar', '.rightRail'],
         text: touch
-          ? 'Aiming pushes in tight. <b>Pinch</b> the battlefield to pull back &mdash; or use this rail: <b>&minus;</b> widens, <b>SURVEY</b> frames both mobiles, <b>RESET VIEW</b> hands the camera back.'
-          : 'Aiming pushes in tight. Roll the <b>WHEEL</b> (or the <b>&minus;</b> here) to pull back and see the whole battlefield &mdash; <b>TAB</b> frames both mobiles, <b>RESET VIEW</b> snaps back.',
+          ? 'Need a wider look before you commit? <b>Pinch</b> the battlefield to pull back &mdash; or use this rail: <b>&minus;</b> widens, <b>SURVEY</b> frames you and the rival, <b>RESET</b> hands the camera back.'
+          : 'Need a wider look before you commit? Roll the <b>WHEEL</b> (or the <b>&minus;</b> here) to pull back &mdash; <b>TAB</b> frames you and the rival, <b>RESET</b> snaps the camera back.',
       },
+      // The last thing said before the player is dropped into a live turn has
+      // to be the firing action. Seven steps used to end having explicitly told
+      // them that holding SPACE does NOT fire, and never corrected it.
       {
         kicker: 'TURN TIMER',
         sel: ['.timerBox', '.timerRing'],
-        text: 'Every turn is on the clock &mdash; when this ring empties your shot is forfeit and the rival takes aim. It has been <b>held</b> while you read; your full turn starts when this closes.',
+        text: touch
+          ? 'Every turn is on the clock &mdash; when this ring empties your shot is forfeit and the rival takes aim. It has been <b>held</b> while you read. When it opens, press and hold <b>FIRE</b> and let go for real &mdash; that fires.'
+          : 'Every turn is on the clock &mdash; when this ring empties your shot is forfeit and the rival takes aim. It has been <b>held</b> while you read. When it opens, hold <b>SPACE</b> and let go for real &mdash; that fires.',
       },
     ];
   }
@@ -2797,14 +3128,34 @@ export class UI {
   // A deliberate exit (SKIP / Escape) counts as a decision, so it marks the
   // player onboarded — but it says where the lesson went first. The "?" is a
   // 30px glyph in the corner; "SKIP" next to "2 / 7" reads as terminal.
-  _skipTutorial() {
-    this.endTutorial(true);
-    this._toast(this.isTouch
-      ? 'TAP ? ANY TIME FOR THE BASICS' : 'PRESS ? ANY TIME FOR THE BASICS');
+  // (The plaque itself is fired by endTutorial, which now says it on BOTH
+  // exits — see the `completed` branch there.)
+  _skipTutorial() { this.endTutorial(true); }
+
+  // One-shot ring on the view rail for a player who never met it. `.help` — the
+  // strip whose SURVEY chip is the other way into this feature — is
+  // display:none on phone landscape, so on that layout a step-1 SKIP used to
+  // leave the camera controls with no introduction at all. Gated on its own
+  // storage key so it happens once per player, not once per match.
+  _railIntro() {
+    const bar = this.el.camBar;
+    if (!bar) return;
+    const KEY = 'thunderbound.railSeen';
+    try { if (window.localStorage && localStorage.getItem(KEY)) return; } catch { /* blocked */ }
+    try { localStorage.setItem(KEY, '1'); } catch { /* blocked */ }
+    bar.classList.remove('intro');
+    void bar.offsetWidth;
+    bar.classList.add('intro');
+    setTimeout(() => bar.classList.remove('intro'), 3000);
+    // Named, not just flashed: a ring on unfamiliar chrome is a puzzle.
+    setTimeout(() => this._toastAt(bar, 'VIEW CONTROLS LIVE HERE'), 900);
   }
 
-  _toast(text, ms = 2600) {
-    const t = this.el.coachToast, b = this.el.helpBtn;
+  _toast(text, ms = 2600) { this._toastAt(this.el.helpBtn, text, ms, true); }
+
+  // Same plaque, parked under any control. Split out so the rail can borrow it.
+  _toastAt(anchor, text, ms = 2600, pulse = false) {
+    const t = this.el.coachToast, b = anchor;
     if (!t) return;
     t.textContent = text;
     if (b) {
@@ -2819,16 +3170,18 @@ export class UI {
       t.style.left = `${Math.round(left)}px`;
       t.style.top = `${Math.round(top)}px`;
       t.style.visibility = '';
-      b.classList.remove('pulse');
-      void b.offsetWidth;
-      b.classList.add('pulse');
+      if (pulse) {
+        b.classList.remove('pulse');
+        void b.offsetWidth;
+        b.classList.add('pulse');
+      }
     } else {
       t.classList.add('on');
     }
     clearTimeout(this._toastT);
     this._toastT = setTimeout(() => {
       t.classList.remove('on');
-      if (b) b.classList.remove('pulse');
+      if (b && pulse) b.classList.remove('pulse');
     }, ms);
   }
 
@@ -2886,6 +3239,7 @@ export class UI {
     const tok = ++this._camDemoTok;
     clearTimeout(this._camDemoT);
     this._camDemoT = 0;
+    this._camDemoUnwatch();
     const G = this._hooks();
     if (!G) return;
     if (!on) {
@@ -2894,9 +3248,41 @@ export class UI {
     }
     try { if (typeof G.setZoomLevel === 'function') G.setZoomLevel(0.1); } catch { /* ignore */ }
     this._camDemoT = setTimeout(() => {
+      this._camDemoT = 0;
+      this._camDemoUnwatch();
       if (tok !== this._camDemoTok || !this._tutOpen) return;
       try { if (typeof G.setZoomLevel === 'function') G.setZoomLevel(1); } catch { /* ignore */ }
     }, 850);
+    // The same step says "TRY IT" and hands the pointer back, so a player who
+    // rolls the wheel inside the 850ms window used to watch the game yank the
+    // lens to MAX out from under them — the first thing they would learn about
+    // the camera is that their input gets overridden. Any real camera gesture
+    // cancels the scheduled leg; the demo has already made its point by then.
+    const grab = () => this._camDemoAbort();
+    const opts = { capture: true, passive: true };
+    window.addEventListener('wheel', grab, opts);
+    window.addEventListener('touchmove', grab, opts);
+    window.addEventListener('pointerdown', grab, opts);
+    this._camDemoWatch = () => {
+      window.removeEventListener('wheel', grab, opts);
+      window.removeEventListener('touchmove', grab, opts);
+      window.removeEventListener('pointerdown', grab, opts);
+    };
+  }
+
+  _camDemoUnwatch() {
+    const f = this._camDemoWatch;
+    this._camDemoWatch = null;
+    if (f) f();
+  }
+
+  // "The player is driving now" — drop the demo's pending leg, keep the step.
+  _camDemoAbort() {
+    if (!this._camDemoT) { this._camDemoUnwatch(); return; }
+    clearTimeout(this._camDemoT);
+    this._camDemoT = 0;
+    this._camDemoTok++;
+    this._camDemoUnwatch();
   }
 
   _gateOff() {
@@ -2907,8 +3293,43 @@ export class UI {
     this._tutCharging = false;
     const g = this._game();
     if (g && g.state === 'charging') { g.state = 'aim'; g.power = 0; this.setPower(0); }
-    if (this.el.cNext) this.el.cNext.classList.remove('hid');
+    if (this.el.cNext) this.el.cNext.classList.remove('hid', 'secondary');
     if (this.el.cTapHint) this.el.cTapHint.classList.remove('act');
+  }
+
+  // The wind lesson, demonstrated instead of asserted: the HUD vane is driven
+  // 1 -> 7 -> back to the real value while the card is up, so "the number is
+  // how hard" has a picture attached. HUD ONLY — setWind paints the dial and
+  // nothing else, the match is frozen for the duration of the coach anyway, and
+  // the true reading is restored the moment the step is left. Frame-counted so
+  // a fixed-dt capture run sees the same thing a player does.
+  _windDemo(on) {
+    const tok = ++this._windDemoTok;
+    if (this._windDemoRaf) { cancelAnimationFrame(this._windDemoRaf); this._windDemoRaf = 0; }
+    const real = this._windReal;
+    if (!on) {
+      if (this._windDemoOn) {
+        this._windDemoOn = false;
+        if (typeof real === 'number') this.setWind(real);
+      }
+      return;
+    }
+    if (typeof real !== 'number') return;
+    this._windDemoOn = true;
+    const sign = real < 0 ? -1 : 1;
+    const FRAMES = 96;                      // ~1.6s at 60fps
+    let f = 0, shown = null;
+    const step = () => {
+      if (tok !== this._windDemoTok || !this._tutOpen) return;
+      const t = f / FRAMES;
+      // up to a gale and back down, easing at both ends
+      const k = Math.sin(Math.PI * Math.min(1, t));
+      const v = Math.round(1 + k * 6);
+      if (v !== shown) { shown = v; this.setWind(sign * v); }
+      if (++f <= FRAMES) this._windDemoRaf = requestAnimationFrame(step);
+      else { this._windDemoRaf = 0; this._windDemoOn = false; this.setWind(real); }
+    };
+    this._windDemoRaf = requestAnimationFrame(step);
   }
 
   // Tear down whatever the step we are leaving switched on.
@@ -2917,7 +3338,17 @@ export class UI {
     this._gateOff();
     this._coachResume();
     if (st && st.cam) this._camDemo(false);
-    this.root.classList.remove('coachGate', 'coachCam');
+    if (st && st.wind) this._windDemo(false);
+    this.root.classList.remove('coachGate', 'coachCam', 'coachTry');
+  }
+
+  // Spelled, not numeric: "Seven quick steps" is a sentence, "7 quick steps" is
+  // a spec line. Falls back to the digits for a deck longer than the words.
+  _countWord(n) {
+    const w = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven',
+      'eight', 'nine', 'ten'];
+    const s = w[n] || String(n);
+    return s.charAt(0).toUpperCase() + s.slice(1);
   }
 
   _renderStep() {
@@ -2925,10 +3356,14 @@ export class UI {
     const i = Math.max(0, Math.min(n - 1, this._tutStep));
     if (this._tutShown !== i) this._leaveStep(this._tutShown);
     const st = this._steps[i];
+    this._tutShownMax = Math.max(this._tutShownMax || 0, i);
     this.el.cKicker.textContent = st.kicker;
     this.el.cCount.textContent = `${i + 1} / ${n}`;
-    this.el.cBody.innerHTML = st.text;
+    // The deck's length is the single source of truth for how many steps the
+    // copy claims there are.
+    this.el.cBody.innerHTML = st.text.replace('{N}', this._countWord(n));
     this.el.cNext.innerHTML = i === n - 1 ? 'PLAY &#9656;' : 'NEXT &#9656;';
+    this.el.cNext.classList.remove('secondary');
     this.el.coachCard.classList.toggle('title', !!st.title);
     const dots = this.el.cDots.children;
     for (let k = 0; k < dots.length; k++) dots[k].classList.toggle('on', k <= i);
@@ -2951,11 +3386,28 @@ export class UI {
       clearTimeout(this._gateT);
       this._gateT = setTimeout(() => {
         if (!this._tutOpen || this._tutShown !== i) return;
+        // The escape hatch must not be indistinguishable from the happy path.
+        // It used to come back as the SAME gold "NEXT ▶" the player had already
+        // pressed three times, while the caption still said "HOLD SPACE TO
+        // CHARGE" — so six seconds of hesitation plus one reflex click skipped
+        // the least obvious control in the genre.
         this.el.cNext.classList.remove('hid');
+        this.el.cNext.classList.add('secondary');
+        this.el.cNext.textContent = 'SKIP THIS STEP';
       }, 6000);
     }
 
-    // Camera step: force the reserved RESET VIEW slot visible (the copy names
+    // A step that asks for a real press on a real HUD button: the scrim stops
+    // swallowing input, and the caption stops promising that a tap anywhere
+    // advances (because on this step it does not).
+    if (st.try) {
+      this.root.classList.add('coachTry');
+      this.el.cTapHint.textContent = 'TRY IT — THEN HIT NEXT';
+    }
+
+    if (st.wind) this._windDemo(true);
+
+    // Camera step: force the reserved RESET slot visible (the copy names
     // it), demonstrate the zoom rather than asserting it, and hand the pointer
     // back so the player can pinch / roll / press the rail while the card is
     // still up. The scrim being inert means NEXT does the advancing here.
@@ -3007,7 +3459,10 @@ export class UI {
   // ruinous on a phone: the ANGLE card covered the entire view rail, and the
   // POWER card covered the HOLD TO CHARGE cap it was describing.
   _keepClear(anchor) {
-    const sels = ['.camBar', '.helpBtn', '.aimC', '.moveC', '.wsel',
+    // '.help' is in the list because the strip is now alive for the whole of
+    // onboarding: the POWER card used to sit straight on top of it, clipping
+    // "WHEEL ZOOM OUT" and hiding the SURVEY chip entirely.
+    const sels = ['.camBar', '.helpBtn', '.help', '.aimC', '.moveC', '.wsel',
       '.fireBtn', '.fireCap', '.timerBox', '.pauseBtn', '.windPlate',
       '.players.left', '.players.right'];
     const out = [];
@@ -3200,6 +3655,9 @@ export class UI {
   }
 
   setWind(wind) {
+    // The last value the GAME asked for, so the onboarding demo (_windDemo) can
+    // put it back. A demo write never becomes the truth.
+    if (!this._windDemoOn) this._windReal = wind;
     // wind: signed, positive = blowing right. The dial is INFORMATIONAL: the
     // arrow's length AND shaft thickness are the magnitude (a wind of 1 is a
     // stub, a gale spans the dial) and its tint runs the HUD's own gold ->
@@ -3236,6 +3694,7 @@ export class UI {
     this.el.windDial.classList.remove('pulse');
     void this.el.windDial.offsetWidth;
     this.el.windDial.classList.add('pulse');
+    if (this._windDemoOn) return;   // a demonstration is not match history
     this._windLog.push(wind);
     if (this._windLog.length > 3) this._windLog.shift();
   }

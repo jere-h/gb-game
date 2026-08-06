@@ -190,8 +190,22 @@ export class Input {
     // the window (touch events bubble) but only acted on when the gesture
     // started on the battlefield itself, so the HUD's own buttons keep every
     // touch that lands on them.
-    const eligible = (t) => t === canvas || t === document.body
-      || (t && (t.id === 'app' || t.id === 'hud'));
+    // A gesture only STARTS on the battlefield. The HUD's own controls keep
+    // every touch that lands on them, but the columns they live in are mostly
+    // pass-through glass (the rail is pointer-events:none so the wheel can
+    // reach the camera), so the element under a finger in the gaps BETWEEN two
+    // rail buttons is #hud — and a tap that hit nothing would otherwise steal
+    // the camera and pop a "reset view" chip at a player who pressed nothing.
+    // The rig already knows which columns those are; no class names needed.
+    const overHud = (x, y) => {
+      const ins = w.safeInsets ? w.safeInsets() : null;
+      if (!ins) return false;
+      const W = (canvas && canvas.clientWidth) || innerWidth || 1;
+      return (ins.l > 0 && x < ins.l) || (ins.r > 0 && x > W - ins.r);
+    };
+    const eligible = (t, p) => (p && p.length === 1 && overHud(p[0].x, p[0].y) ? false
+      : t === canvas || t === document.body
+      || (t && (t.id === 'app' || t.id === 'hud')));
     const pts = (e) => Array.from(e.touches).map((t) => ({ x: t.clientX, y: t.clientY }));
     const mid = (p) => ({
       x: p.reduce((s, q) => s + q.x, 0) / p.length,
@@ -208,7 +222,7 @@ export class Input {
     window.addEventListener('touchstart', (e) => {
       const p = pts(e);
       if (!p.length) return;
-      if (!this._touch && !eligible(e.target)) return;
+      if (!this._touch && !eligible(e.target, p)) return;
       const prev = this._touch;
       this._touch = {
         m: mid(p),
@@ -258,7 +272,9 @@ export class Input {
     let lastTap = 0;
     window.addEventListener('touchend', (e) => {
       const g = this._touch;
-      const tapped = eligible(e.target) && (!g || g.moved < TOUCH_SLOP);
+      const last = e.changedTouches && e.changedTouches[0];
+      const at = last ? [{ x: last.clientX, y: last.clientY }] : null;
+      const tapped = eligible(e.target, at) && (!g || g.moved < TOUCH_SLOP);
       const now = performance.now();
       if (tapped) {
         if (now - lastTap < DOUBLE_TAP_MS) { w.resetCamera(); lastTap = 0; }
