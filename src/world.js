@@ -16,6 +16,18 @@ import { WORLD_W, WORLD_H } from './terrain.js';
 import { clamp, lerp } from './util.js';
 
 const ART_X = 1100;        // max |x| the view may reach at z=0
+// The PLAYER's lens is allowed a little further than the director's. The
+// terrain canvas ends at ±1200, so this is still inside the art, and it
+// guarantees that "as wide as it goes" always shows strictly more world than
+// the automatic establishing shot — otherwise the zoom control is dead on
+// arrival at the one framing a new player meets first (and a control that does
+// nothing reads as a broken game, which is exactly the reported complaint).
+const MANUAL_ART_X = 1185;
+// Headroom the director leaves above itself, as a fraction of the player's
+// widest lens. An automatic wide frame is never allowed to sit ON the player's
+// ceiling: the zoom rail must always have somewhere to travel. Never applied
+// tighter than the lens the cast itself needs (see _frameWide).
+const AUTO_WIDE_FRAC = 0.82;
 const VIEW_BOTTOM = -170;  // lowest world y the view bottom may reach (sea strip)
 const VIEW_TOP = 1500;     // highest world y the view top may reach
 // Lens range. The floor is low enough for a real aim close-up (the mobile has
@@ -83,6 +95,16 @@ const IMPACT_WIDEN = 1.17;
 // that the frame drops off the cliff and fills its lower third with open sea.
 const IMPACT_FRAME_Y = 0.43;
 const IMPACT_LEAD = 0.06;      // blast offset AGAINST travel, fraction of width
+// --- player camera control ---------------------------------------------------
+// Survey frame ("show me the battlefield"): both mobiles and the ground between
+// them, with a wider side margin than the aftermath two-shot so the whole duel
+// reads at a glance rather than sitting on the frame edges.
+const SURVEY_MARGIN = 0.10;
+// Ground line for a MANUAL frame, as a fraction from the frame top. At the
+// tight end it matches the aim close-up; as the lens widens the horizon walks
+// up the frame so the extra room is spent on the battlefield, not on sky.
+const MAN_GROUND_Y0 = 0.785;
+const MAN_GROUND_Y1 = 0.62;
 
 export class World {
   constructor(canvas) {
@@ -121,12 +143,38 @@ export class World {
     // setComposition). null = leave the follow target exactly as handed over.
     this.compose = null;
 
+    // --- player camera control ------------------------------------------------
+    // While `on`, the player owns the framing and this replaces the composed
+    // target for that frame. It still goes through _clampView, so no manual
+    // view can ever show past the edge of the art. Released by resetCamera()
+    // and by firing (main.js), so the player can never be trapped in a view.
+    this.man = {
+      on: false,       // player has taken over
+      zoom: AIM_ZOOM,  // manual lens (absolute, world units)
+      free: false,     // player has panned: x/y are absolute, not derived
+      x: 0,
+      y: 0,
+      survey: false,   // survey framing (both mobiles) latched or held
+    };
+    this._preSurvey = null;   // manual state to restore when a survey peek ends
+    this._auto = { x: 0, y: 0, zoom: AIM_ZOOM }; // last automatic framing
+    // Screen edges the HUD permanently owns, in CSS pixels (see setSafeInsets).
+    // On a phone the touch console owns a ~170px column on the aim side, and a
+    // frame composed against the full viewport puts the rival underneath it.
+    this._insets = { l: 0, r: 0, t: 0, b: 0 };
+    this._wideCap = MAX_ZOOM; // ceiling for the automatic wide frame in flight
+    this.onZoom = null;       // (level 0..1, manual) -> void; wired in main.js
+    this._zoomReport = -1;
+    this._manualReport = false;
+
     this.resize();
     window.addEventListener('resize', () => this.resize());
   }
 
   resize() {
     const w = innerWidth, h = innerHeight;
+    this._vw = w;
+    this._vh = h;
     this.renderer.setSize(w, h);
     this.composer.setSize(w, h);
     this.camera.aspect = w / h;
@@ -163,6 +211,61 @@ export class World {
   //   edges     sorted world x of terrain silhouette edges (tangent guard).
   setComposition(c) { this.compose = c || null; }
 
+  // --- HUD-occupied edges -------------------------------------------------------
+  // The rig frames the cast against the CANVAS, but on a touch layout the
+  // console permanently owns a column of it: the aim pad, the fire cap and the
+  // view rail all sit over live battlefield. Told where that furniture is, the
+  // composition passes below treat the clear glass — not the viewport — as the
+  // frame, so a mobile is never composed underneath the button you are pressing
+  // to shoot at it. Vertical insets are accepted for symmetry but not used:
+  // the top/bottom HUD bands are already baked into ACTOR_MARGIN_TOP/BOT and
+  // the ground-line constants, and applying them twice would double-count.
+  //
+  // Published by the boot layer (main.js), which measures the live HUD, so the
+  // rig never has to know a single HUD class name.
+  setSafeInsets(i) {
+    const n = (v) => (Number.isFinite(+v) ? Math.max(0, +v) : 0);
+    this._insets = { l: n(i && i.l), r: n(i && i.r), t: n(i && i.t), b: n(i && i.b) };
+  }
+
+  safeInsets() { return { ...this._insets }; }
+
+  // Those insets as fractions of the viewport width, with a hard ceiling: a
+  // mis-measured HUD must never be able to squeeze the composition to nothing.
+  _insetFrac() {
+    // From the cached viewport width (resize()): this runs several times per
+    // frame inside the composition passes, and a live clientWidth read there is
+    // a layout query in the middle of the render loop.
+    const w = this._vw || innerWidth || 1;
+    let l = clamp(this._insets.l / w, 0, 0.3);
+    let r = clamp(this._insets.r / w, 0, 0.3);
+    const tot = l + r;
+    if (tot > 0.42) { const k = 0.42 / tot; l *= k; r *= k; }
+    return { l, r };
+  }
+
+  // Side margins for a settled frame, as fractions of the viewport. An edge the
+  // HUD owns is added to that side's margin; the clear side keeps the ordinary
+  // composition margin. Returned as a pair so every framing pass can be
+  // asymmetric without knowing anything about the HUD.
+  _marginLR(margin) {
+    const f = this._insetFrac();
+    const MIN_M = 0.035;
+    const l = f.l > 0.005 ? Math.max(MIN_M, f.l + MIN_M) : margin;
+    const r = f.r > 0.005 ? Math.max(MIN_M, f.r + MIN_M) : margin;
+    const tot = l + r;
+    if (tot > 0.5) { const k = 0.5 / tot; return { l: l * k, r: r * k }; }
+    return { l, r };
+  }
+
+  // World-x offset that recentres a frame inside the unoccluded part of the
+  // viewport. Positive = push the camera toward the HUD side, which slides the
+  // world out from under it.
+  _insetShiftX(halfW) {
+    const f = this._insetFrac();
+    return (f.r - f.l) * halfW;
+  }
+
   // Nudge `x` so a terrain silhouette edge never lands right on the leading
   // frame boundary: an island sliced exactly at the frame edge reads as an
   // accident, so widen until it clears the boundary by EDGE_PAD.
@@ -196,13 +299,30 @@ export class World {
       yLo = Math.min(yLo, a.y - 10);
       yHi = Math.max(yHi, a.y + a.h);
     }
-    // Lens wide enough that the whole actor band fits between the side margins.
-    const needHalfW = (hi - lo) / (2 * (1 - 2 * margin));
+    // Lens wide enough that the whole actor band fits between the side margins
+    // (which include whatever the HUD is sitting on).
+    const m = this._marginLR(margin);
+    const needHalfW = (hi - lo) / (2 * (1 - m.l - m.r));
     const needHalfH = (yHi - yLo) / (2 * (1 - ACTOR_MARGIN_TOP - ACTOR_MARGIN_BOT));
     const need = Math.max(needHalfW / (tanH * aspect), needHalfH / tanH);
+    // Ceiling: an automatic frame stops short of the player's widest lens so
+    // the zoom control always has travel (see AUTO_WIDE_FRAC) — but never
+    // tighter than the cast itself needs.
+    //
+    // Measured WITHOUT the HUD insets on purpose. On a phone the console is so
+    // wide that framing the cast beside it would ask for a lens past the edge
+    // of the art: the request would be clamped anyway, and letting it set the
+    // ceiling would hand the whole zoom range back to the director and leave
+    // the player's control dead again. Insets place the frame (below); they do
+    // not get to decide how wide the game is allowed to open.
+    const needPlain = Math.max(
+      (hi - lo) / (2 * (1 - 2 * margin)) / (tanH * aspect),
+      needHalfH / tanH,
+    );
+    this._wideCap = Math.max(needPlain, this.zoomRange().hi * AUTO_WIDE_FRAC);
     // Never zoom IN here: the aftermath push-out is the director's call, this
     // pass only widens far enough to keep the cast whole.
-    t.zoom = clamp(Math.max(t.zoom, need), MIN_ZOOM, MAX_ZOOM);
+    t.zoom = clamp(Math.min(Math.max(t.zoom, need), this._wideCap), MIN_ZOOM, MAX_ZOOM);
 
     this._band = { lo, hi, yLo, yHi };
     this._leanWide(t, c, margin, true);
@@ -219,9 +339,10 @@ export class World {
     const { lo, hi, yLo, yHi } = band;
     const { halfH, halfW } = this.viewHalfExtents(t.zoom);
     const anchor = c.anchor || { x: (lo + hi) / 2, y: (yLo + yHi) / 2 };
-    const x = (lo + hi) / 2 * (1 - WIDE_ANCHOR_BIAS) + anchor.x * WIDE_ANCHOR_BIAS;
-    const mX = halfW * 2 * margin;
-    const xMin = hi - halfW + mX, xMax = lo + halfW - mX;
+    const m = this._marginLR(margin);
+    const x = (lo + hi) / 2 * (1 - WIDE_ANCHOR_BIAS) + anchor.x * WIDE_ANCHOR_BIAS
+      + this._insetShiftX(halfW);
+    const xMin = hi - halfW + halfW * 2 * m.r, xMax = lo + halfW - halfW * 2 * m.l;
     t.x = xMin > xMax ? (xMin + xMax) / 2 : clamp(x, xMin, xMax);
     if (!withY) return;
     const y = (yLo + yHi) / 2 * (1 - WIDE_ANCHOR_BIAS) + anchor.y * WIDE_ANCHOR_BIAS;
@@ -266,7 +387,9 @@ export class World {
     const lms = c.landmarks;
     if (!lms || !lms.length) return;
     const tanH = Math.tan((this.camera.fov * Math.PI) / 360);
-    const maxHalfH = tanH * Math.min(t.zoom * LM_MAX_WIDEN, MAX_ZOOM);
+    // The landmark guard may widen, but not past the ceiling the wide pass set:
+    // buying sky for an island must not cost the player their zoom-out travel.
+    const maxHalfH = tanH * Math.min(t.zoom * LM_MAX_WIDEN, MAX_ZOOM, this._wideCap);
     // Two passes: the sky pad is a fraction of the frame, so widening for it
     // moves the bar it has to clear.
     for (let pass = 0; pass < 2; pass++) {
@@ -325,15 +448,26 @@ export class World {
   }
 
   // Clamp a {x, y, zoom} view so the frustum at z=0 stays inside the art.
-  _clampView(v) {
+  // `manual` = the player is driving: they get the slightly wider reach the
+  // director does not use, so "widest" is always wider than any frame the game
+  // composes for them.
+  _clampView(v, manual = false) {
     const tanH = Math.tan((this.camera.fov * Math.PI) / 360);
     const aspect = this.camera.aspect || 16 / 9;
-    // Zoom cap: half-width of the view at z=0 must fit inside ART_X.
-    const maxZoom = ART_X / (tanH * aspect);
+    const artX = manual ? MANUAL_ART_X : ART_X;
+    // Zoom cap: the view at z=0 must fit inside the art both ways. The
+    // horizontal cap is the one that binds on a normal landscape viewport; the
+    // vertical one matters once a player is allowed to dolly out on demand,
+    // because a frame taller than the sky band would clamp to a midpoint and
+    // show sea below the art.
+    const maxZoom = Math.min(
+      artX / (tanH * aspect),
+      (VIEW_TOP - VIEW_BOTTOM) / (2 * tanH),
+    );
     v.zoom = clamp(v.zoom, MIN_ZOOM, Math.min(MAX_ZOOM, maxZoom));
     const halfH = tanH * v.zoom;
     const halfW = halfH * aspect;
-    const xLim = Math.max(0, ART_X - halfW);
+    const xLim = Math.max(0, artX - halfW);
     v.x = clamp(v.x, -xLim, xLim);
     const yMin = VIEW_BOTTOM + halfH;
     const yMax = VIEW_TOP - halfH;
@@ -347,6 +481,7 @@ export class World {
   // over the same call.
   _compose() {
     const c = this.compose;
+    this._wideCap = MAX_ZOOM;
     if (!c || !c.shooter) return;
     const t = this.target;
     let { halfH, halfW } = this.viewHalfExtents(t.zoom);
@@ -378,7 +513,10 @@ export class World {
       ({ halfH, halfW } = this.viewHalfExtents(t.zoom));
       // Push the shooter off-centre, against the frame edge it is firing away
       // from, so the aim frame is mostly the ground the shell has to cross.
-      let x = c.shooter.x + dir * (0.5 - AIM_SHOOTER_X) * 2 * halfW;
+      // The shift keeps that corridor in clear glass rather than running it
+      // under the touch console.
+      let x = c.shooter.x + dir * (0.5 - AIM_SHOOTER_X) * 2 * halfW
+        + this._insetShiftX(halfW);
       x = this._avoidTangentCrop(x, halfW, dir, c.edges);
       // ...but never so far that the shooter itself crowds the frame edge.
       const back = (c.shooter.x - (x - dir * halfW)) * dir; // dist to trailing edge
@@ -442,15 +580,315 @@ export class World {
     };
   }
 
+  // --- player camera control ---------------------------------------------------
+  // The rig is otherwise fully automatic, which leaves a player unable to look
+  // at what they are shooting at. These are the hooks the input layer and the
+  // HUD drive; every one of them is reversible with resetCamera(), and firing
+  // hands the camera straight back to the director.
+
+  // Usable lens range for the CURRENT viewport. The top end is whatever keeps
+  // the frustum inside the art (see _clampView), so "widest" always means
+  // "as much of the world as this screen can legally show".
+  zoomRange() {
+    const tanH = Math.tan((this.camera.fov * Math.PI) / 360);
+    const aspect = this.camera.aspect || 16 / 9;
+    const hi = Math.min(
+      MAX_ZOOM,
+      MANUAL_ART_X / (tanH * aspect),
+      (VIEW_TOP - VIEW_BOTTOM) / (2 * tanH),
+    );
+    // Floor: the player's tightest is the game's own aim close-up, not the
+    // director's punch-in floor (MIN_ZOOM). A few taps on "+" used to park a
+    // stranger inside a frame barely wider than their own tank, with no idea
+    // they had gone past useful. MIN_ZOOM stays available to the FX director.
+    const lo = Math.min(AIM_ZOOM_MIN, hi * 0.6);
+    return { lo, hi: Math.max(lo + 1, hi) };
+  }
+
+  // Current lens as 0..1 across that range (0 = tightest, 1 = widest). Read
+  // from the SMOOTHED position, so a HUD indicator animates with the ease
+  // instead of snapping ahead of the picture.
+  zoomLevel() {
+    const r = this.zoomRange();
+    return clamp((this.pos.zoom - r.lo) / (r.hi - r.lo), 0, 1);
+  }
+
+  // Is the player currently driving the camera?
+  isManualCamera() { return this.man.on; }
+
+  // Take the camera over, seeded from the automatic framing so there is no
+  // jump at the moment of hand-over.
+  _takeOver() {
+    const m = this.man;
+    if (m.on) return;
+    const r = this.zoomRange();
+    m.on = true;
+    m.free = false;
+    m.survey = false;
+    m.zoom = clamp(this._auto.zoom || this.target.zoom, r.lo, r.hi);
+    m.x = this.pos.x;
+    m.y = this.pos.y;
+  }
+
+  // Absolute zoom level, 0..1. `manual` false is a programmatic set that does
+  // not claim the camera for the player (used by nothing today, but it keeps
+  // the hook honest for scripted framing).
+  setZoomLevel(t, manual = true) {
+    const r = this.zoomRange();
+    if (manual) this._takeOver();
+    this._dropSurvey();
+    this.man.zoom = r.lo + clamp(Number(t) || 0, 0, 1) * (r.hi - r.lo);
+    return this.zoomLevelTarget();
+  }
+
+  // Stop surveying, but keep looking at what the survey was showing: a player
+  // who zooms or drags out of the survey view expects to carry on from there,
+  // not to be snapped back to where they were before they pressed the key.
+  _dropSurvey() {
+    const m = this.man;
+    this._preSurvey = null;
+    if (!m.survey) return;
+    const sv = this._surveyView();
+    if (sv) { m.zoom = sv.zoom; m.x = sv.x; m.y = sv.y; }
+    m.survey = false;
+  }
+
+  // Where the lens is HEADED (as opposed to zoomLevel(), which is where it is).
+  zoomLevelTarget() {
+    const r = this.zoomRange();
+    let z = this.man.on ? this.man.zoom : this.target.zoom;
+    // While surveying, the lens is the survey framing's, not the stored manual
+    // one — otherwise a stale value from before the survey decides whether the
+    // next zoom press counts as a no-op.
+    if (this.man.on && this.man.survey) {
+      const sv = this._surveyView();
+      if (sv) z = sv.zoom;
+    }
+    return clamp((z - r.lo) / (r.hi - r.lo), 0, 1);
+  }
+
+  // A press that cannot move the lens must not claim the camera: latching
+  // manual mode (and popping the "reset view" affordance) for a no-op tells the
+  // player they broke something when nothing happened at all.
+  _deadPress(d) {
+    const t = this.zoomLevelTarget();
+    return (d > 0 && t >= 0.999) || (d < 0 && t <= 0.001);
+  }
+
+  // Relative zoom in level units (+ = wider). The wheel and the zoom keys.
+  zoomByLevel(d) {
+    if (!d) return this.zoomLevelTarget();
+    if (this._deadPress(d)) return this.zoomLevelTarget();
+    this._takeOver();
+    this._dropSurvey();
+    return this.setZoomLevel(this.zoomLevelTarget() + d);
+  }
+
+  // Relative zoom as a scale factor (>1 = wider). Pinch gestures are naturally
+  // multiplicative: the world should scale with the distance between fingers.
+  zoomByFactor(f) {
+    if (!(f > 0) || f === 1) return this.zoomLevelTarget();
+    if (this._deadPress(f - 1)) return this.zoomLevelTarget();
+    this._takeOver();
+    this._dropSurvey();
+    const r = this.zoomRange();
+    this.man.zoom = clamp(this.man.zoom * f, r.lo, r.hi);
+    return this.zoomLevelTarget();
+  }
+
+  // Drag-to-look. Screen pixels in, world units out: dragging right pulls the
+  // world right (the frame moves left), which is the gesture everyone already
+  // has in their hands from every map on earth.
+  panByPixels(dx, dy) {
+    if (!dx && !dy) return;
+    this._takeOver();
+    this._dropSurvey();
+    const v = this._manualView();
+    if (!this.man.free) { this.man.x = v.x; this.man.y = v.y; this.man.free = true; }
+    const { halfH, halfW } = this.viewHalfExtents(v.zoom);
+    const el = this.renderer.domElement;
+    const w = (el && el.clientWidth) || innerWidth || 1;
+    const h = (el && el.clientHeight) || innerHeight || 1;
+    this.man.x -= dx * (2 * halfW) / w;
+    this.man.y += dy * (2 * halfH) / h;
+  }
+
+  // Let go of a drag-frozen view without giving up the manual lens. Free-look
+  // holds an absolute x/y, so it stops recomposing around the shooter: a player
+  // who dragged to look at the rival and then WALKS would otherwise scroll off
+  // the edge of a static frame with no cue that the camera was detached. The
+  // moment they drive, the frame follows them again — same zoom, same intent.
+  releaseFreeLook() {
+    if (!this.man.free) return false;
+    this.man.free = false;
+    return true;
+  }
+
+  // Survey view: both mobiles and the ground between them, in one frame.
+  // survey() with no argument toggles (what a HUD button wants); survey(true)
+  // / survey(false) is the hold-to-peek path the keyboard uses. Ending a peek
+  // restores whatever the player was looking at before it — an automatic frame
+  // if they had not touched the camera at all.
+  survey(on) {
+    const m = this.man;
+    const want = on === undefined ? !m.survey : !!on;
+    if (want === m.survey) return want;
+    if (want) {
+      this._preSurvey = m.on ? { ...m } : null;
+      m.on = true;
+      m.survey = true;
+    } else {
+      m.survey = false;
+      if (this._preSurvey) Object.assign(m, this._preSurvey, { survey: false });
+      else this.resetCamera();
+      this._preSurvey = null;
+    }
+    return want;
+  }
+
+  isSurveying() { return this.man.survey; }
+
+  // Hand the camera back to the director. Firing does this too, so a player is
+  // never stuck in a view they cannot get out of.
+  resetCamera() {
+    this.man.on = false;
+    this.man.free = false;
+    this.man.survey = false;
+    this._preSurvey = null;
+  }
+
+  // Survey framing, measured from the cast in the current composition brief.
+  // Returns null when there is nothing to frame (one mobile left, no brief).
+  _surveyView() {
+    const c = this.compose;
+    if (!c || !c.actors || c.actors.length < 2) return null;
+    // anchor:null so the frame centres on the cast rather than leaning toward
+    // the story point — a survey is an answer to "where is everything".
+    const brief = this._svBrief || (this._svBrief = { actors: null, anchor: null });
+    brief.actors = c.actors;
+    const t = this._svView || (this._svView = { x: 0, y: 0, zoom: MIN_ZOOM });
+    t.x = 0; t.y = 0; t.zoom = MIN_ZOOM;
+    const band = this._band;
+    const cap = this._wideCap;
+    const ok = this._frameWide(t, brief, SURVEY_MARGIN);
+    this._band = band;
+    this._wideCap = cap;    // survey is the PLAYER's frame; it may use the whole lens
+    return ok ? this._clampView(t, true) : null;
+  }
+
+  // The frame the player's manual settings ask for. Re-composes the automatic
+  // shot at the manual lens rather than just changing z: keeping the shooter
+  // where it was in frame, and drifting toward the survey framing as the lens
+  // widens, is the difference between "zoom out" showing the battlefield and
+  // showing more sky next to the same tank.
+  _manualView() {
+    const m = this.man;
+    const r = this.zoomRange();
+    const zoom = clamp(m.zoom, r.lo, r.hi);
+    if (m.free) return { x: m.x, y: m.y, zoom };
+    const { halfH, halfW } = this.viewHalfExtents(zoom);
+    const c = this.compose;
+    let x = this._auto.x;
+    let y = this._auto.y;
+    if (c && c.shooter) {
+      const lvl = clamp((zoom - r.lo) / (r.hi - r.lo), 0, 1);
+      y = c.shooter.groundY + halfH * (2 * lerp(MAN_GROUND_Y0, MAN_GROUND_Y1, lvl) - 1);
+      const dir = c.facing == null ? 0 : (c.facing >= 0 ? 1 : -1);
+      if (dir) {
+        // Aim brief: hold the shooter where the composition pass puts it, so
+        // the corridor the shell has to cross keeps the width of the frame.
+        x = c.shooter.x + dir * (0.5 - AIM_SHOOTER_X) * 2 * halfW
+          + this._insetShiftX(halfW);
+      } else if (zoom < this._auto.zoom) {
+        // No firing direction in the brief (the establishing/aftermath frames):
+        // tightening the lens should home in on whoever is shooting rather
+        // than magnify the empty middle of the map.
+        const u = clamp((this._auto.zoom - zoom) / Math.max(1, this._auto.zoom - r.lo), 0, 1);
+        x = lerp(x, c.shooter.x, u * u * (3 - 2 * u));
+      }
+    }
+    const az = this._auto.zoom;
+    const sv = zoom > az ? this._surveyView() : null;
+    if (sv && sv.zoom > az) {
+      // Ease from the (re-composed) automatic frame into the survey frame as
+      // the lens opens up, so a wheel-out lands on the whole duel.
+      const u = clamp((zoom - az) / (sv.zoom - az), 0, 1);
+      const s = u * u * (3 - 2 * u);
+      x = lerp(x, sv.x, s);
+      y = lerp(y, sv.y, s);
+    }
+    if (c) {
+      // Guard order matters here. _avoidActorClip resolves a straddled frame
+      // edge by whichever move is cheaper — often by pushing the mobile OUT of
+      // shot, which is right for a cinematic still and exactly wrong for a
+      // player who zoomed out to look at that mobile. So once the lens is wide
+      // enough to hold the whole cast, holding it wins; below that the usual
+      // no-slice guard applies.
+      const hold = this._holdCast(x, halfW, c.actors);
+      x = hold === null ? this._avoidActorClip(x, halfW, c.actors) : hold;
+    }
+    return { x, y, zoom };
+  }
+
+  // Clamp a manual frame so every actor stays inside it, with a little air
+  // where the lens can afford it. Returns null when the cast simply does not
+  // fit at this zoom.
+  _holdCast(x, halfW, actors) {
+    if (!actors || !actors.length) return null;
+    let lo = Infinity, hi = -Infinity;
+    for (const a of actors) {
+      lo = Math.min(lo, a.x - a.hw);
+      hi = Math.max(hi, a.x + a.hw);
+    }
+    const slack = 2 * halfW - (hi - lo);
+    if (slack < 0) return null;
+    // Air on each side, biased away from whatever the HUD is covering: a player
+    // who zoomed out to look at the rival must not find it behind a button.
+    const f = this._insetFrac();
+    const ml = Math.min(halfW * (0.09 + 2 * f.l), slack / 2);
+    const mr = Math.min(halfW * (0.09 + 2 * f.r), slack / 2);
+    const xMin = hi - halfW + mr, xMax = lo + halfW - ml;
+    return xMin > xMax ? (xMin + xMax) / 2 : clamp(x, xMin, xMax);
+  }
+
+  // Replace the composed target with the player's framing, when they have one.
+  _applyManual() {
+    const t = this.target;
+    this._auto.x = t.x;
+    this._auto.y = t.y;
+    this._auto.zoom = t.zoom;
+    const m = this.man;
+    if (!m.on) return;
+    const v = m.survey ? (this._surveyView() || this._manualView()) : this._manualView();
+    t.x = v.x;
+    t.y = v.y;
+    t.zoom = v.zoom;
+  }
+
+  // Tell the HUD where the lens is. Throttled to real changes so the UI is not
+  // asked to re-render sixty times a second for nothing.
+  _reportZoom() {
+    if (!this.onZoom) return;
+    const lvl = this.zoomLevel();
+    const man = this.man.on;
+    if (man === this._manualReport && Math.abs(lvl - this._zoomReport) < 0.004) return;
+    this._zoomReport = lvl;
+    this._manualReport = man;
+    try { this.onZoom(lvl, man); } catch (e) { /* HUD is never load-bearing */ }
+  }
+
   update(dt, shake = { x: 0, y: 0 }) {
     this._compose();
-    this._clampView(this.target);
+    this._applyManual();
+    const manual = this.man.on;
+    this._clampView(this.target, manual);
     const k = 1 - Math.pow(0.0018, dt);
     this.pos.x = lerp(this.pos.x, this.target.x, k);
     this.pos.y = lerp(this.pos.y, this.target.y, k);
     // Zoom eases a touch faster than pan: snappy-but-eased zoom-in at turn
-    // start, gentle drift-out during flight.
-    this.pos.zoom = lerp(this.pos.zoom, this.target.zoom, k * 0.9);
+    // start, gentle drift-out during flight. Under manual control it is
+    // quicker still — a wheel notch has to feel connected to the hand.
+    this.pos.zoom = lerp(this.pos.zoom, this.target.zoom, Math.min(1, k * (this.man.on ? 2.1 : 0.9)));
 
     // Impact zoom punch: quick dip toward the action, springs back.
     if (this.punchT > 0) this.punchT = Math.max(0, this.punchT - dt * 3.4);
@@ -460,9 +898,10 @@ export class World {
       x: this.pos.x,
       y: this.pos.y,
       zoom: this.pos.zoom * (1 - pk * 0.085),
-    }, dt));
+    }, dt), manual);
     this.camera.position.set(view.x + shake.x, view.y + shake.y, view.zoom);
     this.camera.lookAt(view.x + shake.x, view.y + shake.y, 0);
+    this._reportZoom();
     this.composer.render();
   }
 }

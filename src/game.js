@@ -64,6 +64,11 @@ export class Game {
     // Cinematic state.
     this.hitstop = 0;            // seconds of time-freeze left (consumed by main loop)
     this.onImpactKick = null;    // main.js hooks this to punch the camera zoom
+    // () -> { l, r, t, b } CSS pixels of screen edge the HUD owns; wired in
+    // main.js. Overlays that ride the frame edge (the off-screen rival marker)
+    // dock inside it, so the one thing that answers "where is my target" does
+    // not end up behind the FIRE button on a phone.
+    this.viewInsets = null;
     this.introT = 0.7;           // "wind changes" beat: timer/AI hold at turn start
     this.resolveT = 0;           // breather countdown while state === 'resolving'
     this.lastPower = 62;         // remembered for the pre-charge preview arc
@@ -889,7 +894,12 @@ export class Game {
     // The sprite is centred on its position, so the inset has to clear half of
     // its own width plus a margin or the chevron hangs off the frame.
     const wPx = markerPx();
-    const inset = perPx * (wPx * 0.5 + 18);
+    // ...plus whatever the console owns on that side of the screen: a chevron
+    // parked under the FIRE button answers nothing.
+    const perPxX = (2 * halfW) / Math.max(1, innerWidth);
+    const ins = (this.viewInsets && this.viewInsets()) || null;
+    const hudPx = !ins ? 0 : Math.max(0, dir > 0 ? ins.r : ins.l);
+    const inset = perPx * (wPx * 0.5 + 18) + perPxX * hudPx;
     const edge = cam.position.x + dir * (halfW - inset);
     // Visible (with room to spare)? Then the frame already answers the
     // question and a chevron would only be clutter.

@@ -5,6 +5,26 @@
 const SEGS = 30;      // power gauge segment count
 const MAX_WIND = 7;   // wind magnitude that maxes out the compass needle
 
+// First-run onboarding: the flag that says "this player has been shown the
+// ropes". Written to BOTH stores — localStorage so it survives across visits,
+// sessionStorage so a privacy mode that refuses (or wipes) localStorage still
+// cannot make the coach re-nag inside one sitting. Every access is guarded:
+// touching localStorage THROWS outright in some blocked-cookie modes.
+const ONBOARD_KEY = 'thunderbound.onboarded';
+// Keys that mean "I am already playing, get out of my way": the coach stands
+// down instead of arguing with a player (or a scripted capture run) that has
+// taken the controls.
+const COACH_YIELD = new Set([
+  'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
+  'KeyW', 'KeyA', 'KeyS', 'KeyD', 'Space',
+]);
+// How long a player may lean on the controls before the coach concludes they
+// would rather play than read. Taps are free (a tap is ~80ms); this is a
+// budget for SUSTAINED input, and running it out closes onboarding as
+// "not completed", so it is offered again on the next visit rather than lost.
+const COACH_HOLD_BUDGET = 2500;
+const ZOOM_STEP = 0.2; // one press of the +/- stepper, in 0..1 zoom level
+
 // Linear interpolate two #rrggbb colors -> 'rgb(...)'.
 function lerpColor(a, b, t) {
   const pa = parseInt(a.slice(1), 16), pb = parseInt(b.slice(1), 16);
@@ -1612,6 +1632,392 @@ export class UI {
           #hud .dmg.callout > span { font-size: 34px; letter-spacing: 2px; }
           #hud .dmg.callout .dStroke { -webkit-text-stroke-width: 5px; }
         }
+
+        /* ============ view rail: camera controls + help ============
+           The complaint this answers is "I can't see my target and I don't know
+           how to zoom out". A hidden gesture cannot fix that, so the controls
+           are PERMANENT chrome in the console's own material: a caption, a
+           trough that fills as the view widens, two steppers, SURVEY (frame
+           both mobiles) and — the part that stops a player feeling trapped —
+           a gold RESET VIEW chip that lights the moment the camera stops being
+           automatic. Docked to the right rail, the same edge the aim column
+           lives on, so "aim" and "look" are one thumb zone. */
+        #hud .rightRail {
+          position: absolute; z-index: 8; pointer-events: none;
+          right: var(--hud-gutter); top: 50%; transform: translateY(-50%);
+          display: flex; flex-direction: column; align-items: center; gap: 9px;
+        }
+        /* The rail's plate is inert; only its controls take the pointer, so a
+           mouse wheel over the rail still reaches the camera. */
+        #hud .camBar {
+          pointer-events: none;
+          display: flex; flex-direction: column; align-items: center; gap: 6px;
+          padding: 5px 8px 8px; border-radius: 16px;
+          background: linear-gradient(180deg, #3b4d8f 0%, #232e5c 38%, #131a38 100%);
+          border: 2px solid #e8b64a;
+          box-shadow: 0 0 0 2px #6b4a12,
+            inset 0 1px 0 rgba(255,255,255,0.30),
+            inset 0 -7px 12px rgba(0,0,0,0.38),
+            0 5px 16px rgba(0,0,0,0.55);
+        }
+        #hud .camBar .miniLabel { letter-spacing: 2.2px; }
+        /* Same filled-and-bevelled keycap kit as .shotBtn / .key: the rail must
+           not introduce a fourth button idiom into the console language. */
+        #hud .cbtn {
+          pointer-events: auto; cursor: pointer;
+          width: 38px; height: 30px; border-radius: 8px;
+          display: flex; align-items: center; justify-content: center;
+          background: linear-gradient(#3b4a80, #1c2549 60%, #141b3d);
+          border: 1px solid #0a0f22;
+          box-shadow: inset 0 1px 0 rgba(255,255,255,0.28), 0 2px 0 rgba(0,0,0,0.6);
+          color: #ffe7a0; font-size: 19px; font-weight: 800; line-height: 1;
+          text-shadow: 0 1px 2px #000; touch-action: manipulation;
+          transition: filter 0.12s, transform 0.08s;
+        }
+        #hud .cbtn:active {
+          transform: translateY(1px); filter: brightness(1.35);
+          box-shadow: inset 0 1px 0 rgba(255,255,255,0.28), 0 1px 0 rgba(0,0,0,0.6),
+            0 0 12px rgba(255,215,94,0.45);
+        }
+        /* SURVEY and RESET VIEW are peers, so they must LOOK like peers. SURVEY
+           used to render as flat small-caps on the rail's own dark bottom — a
+           caption in the same register as the VIEW label — while its twin wore
+           a gold plate. Both now carry the plate; RESET VIEW stays the louder
+           of the two by being FILLED rather than by being the only one with
+           any chrome at all. */
+        #hud .cbtn.wide {
+          width: 38px; height: 22px; font-size: 9px; letter-spacing: 0.10em;
+          color: #ffe7a0;
+          background: linear-gradient(#46589b, #232e5f 58%, #182050);
+          border: 1px solid #6b4a12;
+          box-shadow: inset 0 1px 0 rgba(255,215,94,0.34), 0 2px 0 rgba(0,0,0,0.6);
+        }
+        /* An exhausted stepper must look exhausted: pressing "-" at maximum
+           zoom-out used to leave a full trough sitting still, which reads as a
+           broken game rather than as a limit. */
+        #hud .cbtn.dim { opacity: 0.4; pointer-events: none; filter: saturate(0.5); }
+        /* How wide is the view? A trough that fills from the bottom — the same
+           read as the power gauge, so the player already knows how to read it. */
+        #hud .camGauge {
+          position: relative; width: 38px; height: 42px; border-radius: 7px;
+          background: linear-gradient(#0a1230, #121a40 70%, #1a2a55);
+          border: 2px solid #0a0f22; overflow: hidden;
+          box-shadow: inset 0 3px 7px rgba(0,0,0,0.85), 0 1px 0 rgba(255,255,255,0.18);
+        }
+        #hud .camFill {
+          position: absolute; left: 0; right: 0; bottom: 0; height: 10%;
+          background: linear-gradient(180deg, #fff0b0, #ffd75e 45%, #d59b1f);
+          box-shadow: inset 0 1px 0 rgba(255,255,255,0.65), 0 0 9px rgba(255,215,94,0.5);
+          transition: height 0.18s ease-out;
+        }
+        #hud .camTicks {
+          position: absolute; inset: 2px 3px; pointer-events: none;
+          background: linear-gradient(180deg,
+            transparent 0 calc(33% - 1px), rgba(8,12,32,0.75) calc(33% - 1px) calc(33% + 1px),
+            transparent calc(33% + 1px) calc(66% - 1px), rgba(8,12,32,0.75) calc(66% - 1px) calc(66% + 1px),
+            transparent calc(66% + 1px));
+        }
+        /* the numeral slot: one word, in the gold display family */
+        #hud .camVal {
+          font-family: 'Baloo 2', 'Trebuchet MS', sans-serif;
+          height: 15px; line-height: 15px;
+          font-size: 13px; font-weight: 800; letter-spacing: 0.06em;
+          color: var(--gold); text-shadow: 0 2px 0 rgba(0,0,0,0.7), 0 0 8px rgba(0,0,0,0.5);
+        }
+        /* RESET VIEW: reserved slot, so the buttons above it never move under
+           the thumb when manual control toggles. */
+        #hud .cbtn.cReset {
+          height: 28px; padding: 0 1px; line-height: 1.05; text-align: center;
+          white-space: normal; letter-spacing: 0.02em; font-size: 8.5px;
+          background: linear-gradient(#ffe9a0, #ffd75e 55%, #d59b1f);
+          border-color: #6b4a12; color: #402c05; letter-spacing: 0.06em;
+          text-shadow: 0 1px 0 rgba(255,255,255,0.5);
+          box-shadow: inset 0 1px 0 rgba(255,255,255,0.7), 0 2px 0 rgba(0,0,0,0.55);
+          visibility: hidden; opacity: 0; pointer-events: none;
+          transition: opacity 0.2s;
+        }
+        #hud .camBar.manual .cReset {
+          visibility: visible; opacity: 1; pointer-events: auto;
+          animation: resetPop 1.6s ease-in-out infinite;
+        }
+        @keyframes resetPop {
+          50% { box-shadow: inset 0 1px 0 rgba(255,255,255,0.7), 0 2px 0 rgba(0,0,0,0.55),
+                  0 0 13px rgba(255,215,94,0.85); }
+        }
+        /* The camera lesson NAMES this chip. A step that points at a rail and
+           says "hit RESET VIEW" while the slot is empty teaches a control that
+           does not appear to exist, so the coach forces the reserved slot to
+           show itself (greyed, because it is not armed yet) for that one step.
+           The step also drives the lens live, which arms it for real. */
+        #hud.coachCam .camBar .cReset {
+          visibility: visible; opacity: 0.55; animation: none;
+        }
+        #hud.coachCam .camBar.manual .cReset { opacity: 1; }
+        /* the "?" replay button: same dome kit as the touch buttons */
+        #hud .helpBtn {
+          pointer-events: auto; cursor: pointer;
+          width: 36px; height: 36px; border-radius: 50%;
+          display: flex; align-items: center; justify-content: center;
+          background: linear-gradient(180deg, #46599c, #1d2750 55%, #131a38);
+          border: 2px solid #e8b64a;
+          box-shadow: 0 0 0 2px #6b4a12, inset 0 1px 0 rgba(255,255,255,0.32),
+            inset 0 -5px 9px rgba(0,0,0,0.4), 0 4px 10px rgba(0,0,0,0.5);
+          color: #ffe7a0; font-size: 20px; font-weight: 800; line-height: 1;
+          text-shadow: 0 2px 2px #000; touch-action: manipulation;
+        }
+        #hud .helpBtn:active {
+          transform: scale(0.93);
+          box-shadow: 0 0 0 2px #6b4a12, 0 0 16px rgba(255,215,94,0.6),
+            inset 0 0 12px rgba(255,215,94,0.35);
+        }
+        #hud .helpBtn.pulse { animation: helpPulse 0.6s ease-out 3; }
+        @keyframes helpPulse {
+          0%   { box-shadow: 0 0 0 2px #6b4a12, 0 0 0 0 rgba(255,215,94,0.85); }
+          100% { box-shadow: 0 0 0 2px #6b4a12, 0 0 0 16px rgba(255,215,94,0); }
+        }
+        /* caption for the "?" — same small-caps rail language as VIEW */
+        #hud .helpCap {
+          margin-top: -5px;
+          font-size: 9px; font-weight: 800; letter-spacing: 2.2px;
+          color: #ffe7a0; text-shadow: 0 1px 2px #000; white-space: nowrap;
+        }
+        /* the "it's recoverable" plaque, parked under the "?" it points at */
+        #hud .coachToast {
+          position: fixed; z-index: 62; pointer-events: none;
+          padding: 5px 11px 6px; border-radius: 9px; max-width: 60vw;
+          background: linear-gradient(180deg, #3b4d8f 0%, #232e5c 40%, #131a38 100%);
+          border: 2px solid #e8b64a;
+          box-shadow: 0 0 0 2px #6b4a12, inset 0 1px 0 rgba(255,255,255,0.3),
+            0 8px 20px rgba(0,0,10,0.6);
+          font-size: 11px; font-weight: 800; letter-spacing: 0.10em;
+          color: #ffe7a0; text-shadow: 0 1px 2px #000; white-space: nowrap;
+          opacity: 0; transform: translateY(-6px); transition: opacity 0.2s, transform 0.2s;
+        }
+        #hud .coachToast.on { opacity: 1; transform: none; }
+
+        /* the hint strip's SURVEY chip is a real control, not a caption */
+        #hud .help .hSurvey { pointer-events: auto; cursor: pointer; color: #ffe7a0; }
+        #hud .help .hSurvey:active { filter: brightness(1.3); }
+
+        /* ============ first-run coach marks ============
+           A step-by-step onboarding that POINTS at the real control it is
+           talking about: one scrim with a hole cut around the live HUD element
+           (box-shadow spread, so the hole tracks the element exactly), a gold
+           ring on it, and a plaque tethered to it by a caret. Same navy glass +
+           single gold stroke as the console; it must read as part of the game,
+           not as a browser dialog. */
+        #hud .coach { position: absolute; inset: 0; z-index: 60; display: none; }
+        #hud .coach.on { display: block; pointer-events: auto; }
+        #hud .coachSpot {
+          position: absolute; left: -50px; top: -50px; width: 0; height: 0;
+          border-radius: 16px; pointer-events: none;
+          box-shadow:
+            0 0 0 3px #e8b64a,
+            0 0 0 5px rgba(107,74,18,0.95),
+            0 0 26px rgba(255,215,94,0.5),
+            0 0 0 9999px rgba(6,10,26,0.68);
+        }
+        #hud .coachSpot::after {
+          content: ''; position: absolute; inset: -9px; border-radius: 22px;
+          border: 2px solid rgba(255,215,94,0.8); pointer-events: none;
+          animation: coachRing 1.6s ease-out infinite;
+        }
+        @keyframes coachRing {
+          0%   { transform: scale(0.95); opacity: 0.85; }
+          70%  { transform: scale(1.07); opacity: 0; }
+          100% { opacity: 0; }
+        }
+        #hud .coachCard {
+          position: absolute; left: 0; top: 0; width: 356px;
+          max-width: calc(100vw - 24px);
+          padding: 10px 14px 12px; border-radius: 14px;
+          background: linear-gradient(180deg, #3b4d8f 0%, #232e5c 38%, #131a38 100%);
+          border: 2px solid #e8b64a;
+          box-shadow: 0 0 0 2px #6b4a12,
+            inset 0 1px 0 rgba(255,255,255,0.30),
+            inset 0 -9px 16px rgba(0,0,0,0.4),
+            0 10px 28px rgba(0,0,10,0.65);
+        }
+        #hud .coach.on .coachCard { animation: coachIn 0.26s cubic-bezier(.3,1.5,.5,1) both; }
+        @keyframes coachIn {
+          from { opacity: 0; transform: translateY(9px) scale(0.97); }
+          to   { opacity: 1; transform: none; }
+        }
+        /* solid gold caret: the plaque is tethered to the ring, never floating */
+        #hud .cCaret { position: absolute; background: #e8b64a; }
+        #hud .coachCard.below .cCaret {
+          top: -10px; width: 22px; height: 10px;
+          clip-path: polygon(50% 0, 100% 100%, 0 100%);
+        }
+        #hud .coachCard.above .cCaret {
+          bottom: -10px; width: 22px; height: 10px;
+          clip-path: polygon(50% 100%, 100% 0, 0 0);
+        }
+        #hud .coachCard.leftOf .cCaret {
+          right: -10px; width: 10px; height: 22px;
+          clip-path: polygon(100% 50%, 0 0, 0 100%);
+        }
+        #hud .coachCard.rightOf .cCaret {
+          left: -10px; width: 10px; height: 22px;
+          clip-path: polygon(0 50%, 100% 0, 100% 100%);
+        }
+        #hud .coachCard.none .cCaret { display: none; }
+        #hud .cHead {
+          display: flex; align-items: center; justify-content: space-between;
+          gap: 10px; margin-bottom: 4px;
+        }
+        #hud .cKicker {
+          font-size: 10px; font-weight: 800; letter-spacing: 2.4px;
+          color: #ffe7a0; text-shadow: 0 1px 2px #000; white-space: nowrap;
+        }
+        #hud .cCount {
+          flex: 0 0 auto; padding: 1px 7px 2px; border-radius: 5px;
+          background: rgba(8,12,32,0.7);
+          box-shadow: inset 0 1px 0 rgba(255,215,94,0.28);
+          font-size: 11px; font-weight: 800; letter-spacing: 0.06em;
+          color: #ffd75e; text-shadow: 0 1px 2px #000;
+        }
+        #hud .cBody {
+          font-size: 15px; font-weight: 700; line-height: 1.34; color: #e6ecff;
+          text-shadow: 0 1px 2px rgba(0,0,10,0.8);
+        }
+        #hud .cBody b { color: #ffe27a; }
+        #hud .cFoot {
+          display: flex; align-items: center; gap: 8px; margin-top: 10px;
+        }
+        #hud .cDots { display: flex; gap: 4px; flex: 1 1 auto; }
+        #hud .cDots i {
+          width: 7px; height: 7px; border-radius: 50%;
+          background: rgba(180,200,255,0.22);
+          box-shadow: inset 0 1px 0 rgba(0,0,0,0.5);
+        }
+        #hud .cDots i.on {
+          background: linear-gradient(#fff0b0, #ffd75e 60%, #d59b1f);
+          box-shadow: 0 0 7px rgba(255,215,94,0.7);
+        }
+        #hud .cSkip, #hud .cNext {
+          pointer-events: auto; cursor: pointer; flex: 0 0 auto;
+          height: 28px; padding: 0 12px; border-radius: 7px;
+          display: flex; align-items: center; justify-content: center;
+          font-size: 12px; font-weight: 800; letter-spacing: 0.10em;
+          touch-action: manipulation;
+        }
+        #hud .cSkip {
+          background: linear-gradient(#3b4a80, #1c2549 60%, #141b3d);
+          border: 1px solid #0a0f22; color: #aebbe8;
+          box-shadow: inset 0 1px 0 rgba(255,255,255,0.24), 0 2px 0 rgba(0,0,0,0.55);
+          text-shadow: 0 1px 2px #000;
+        }
+        #hud .cNext {
+          background: linear-gradient(#ffe9a0, #ffd75e 55%, #d59b1f);
+          border: 1px solid #6b4a12; color: #402c05;
+          text-shadow: 0 1px 0 rgba(255,255,255,0.5);
+          box-shadow: inset 0 1px 0 rgba(255,255,255,0.7), 0 2px 0 rgba(0,0,0,0.55),
+            0 0 10px rgba(255,215,94,0.35);
+        }
+        #hud .cSkip:active, #hud .cNext:active { transform: translateY(1px); }
+        /* "anywhere works": the advance affordance, stated once, quietly */
+        #hud .cTapHint {
+          margin-top: 7px; text-align: center;
+          font-size: 10px; font-weight: 800; letter-spacing: 0.12em;
+          color: rgba(190,205,240,0.62); text-shadow: 0 1px 2px #000;
+        }
+        /* the gate step asks for a real input, so its hint is an instruction */
+        #hud .cTapHint.act {
+          color: #ffd75e; letter-spacing: 0.14em;
+          animation: gateHint 1.15s ease-in-out infinite;
+        }
+        @keyframes gateHint { 50% { opacity: 0.45; } }
+        #hud .cNext.hid { display: none; }
+
+        /* Step 1 is the product, not a control: name the game, state the goal,
+           then teach. The kicker carries the display face at title size. */
+        #hud .coachCard.title { text-align: center; }
+        #hud .coachCard.title .cHead { justify-content: center; }
+        #hud .coachCard.title .cCount { display: none; }
+        #hud .coachCard.title .cKicker {
+          font-family: 'Baloo 2', 'Trebuchet MS', sans-serif;
+          font-size: 28px; line-height: 1.1; letter-spacing: 1.6px;
+          color: var(--gold);
+          text-shadow: 0 3px 0 rgba(0,0,0,0.55), 0 0 14px rgba(255,215,94,0.35);
+        }
+        #hud .coachCard.title .cDots { justify-content: center; }
+
+        /* STAND ASIDE, do not self-destruct. A stranger who taps an arrow key
+           while reading "Hold up/down to tilt" used to lose onboarding on the
+           spot, permanently and with no confirmation. Now the card just gets
+           out of the way and comes back a moment later. */
+        #hud.coachIdle .coach.on { pointer-events: none; }
+        #hud.coachIdle .coachCard { opacity: 0.3; transition: opacity 0.15s; }
+        #hud.coachIdle .coachSpot { opacity: 0; transition: opacity 0.15s; }
+
+        /* The interaction gate: the scrim stops swallowing input so the player
+           can actually reach the control the step is about (the spotlighted
+           FIRE button on touch, the pinch gesture on the camera step). The
+           card's own buttons stay live either way. */
+        #hud.coachGate .coach.on,
+        #hud.coachCam .coach.on { pointer-events: none; }
+        #hud.coachGate .coachSpot {
+          box-shadow:
+            0 0 0 3px #ffd75e,
+            0 0 0 5px rgba(107,74,18,0.95),
+            0 0 34px rgba(255,215,94,0.75),
+            0 0 0 9999px rgba(6,10,26,0.55);
+        }
+
+        /* --- compact rail + coach for small screens --- */
+        @media (max-width: 980px) {
+          #hud .coachCard { width: 320px; padding: 9px 12px 10px; }
+          #hud .cBody { font-size: 14px; }
+        }
+        /* Phone landscape: the rail hangs from the top band (the bottom-right
+           corner belongs to FIRE and its charge cap), and the "?" moves up
+           beside PAUSE where the top strip already lives. */
+        @media (max-height: 500px) {
+          #hud .rightRail {
+            top: calc(52px + env(safe-area-inset-top, 0px));
+            right: calc(6px + env(safe-area-inset-right, 0px));
+            transform: none; gap: 0;
+          }
+          #hud .camBar { gap: 4px; padding: 4px 7px 6px; border-radius: 14px; }
+          #hud .cbtn { width: 34px; height: 28px; font-size: 18px; }
+          #hud .cbtn.wide { width: 34px; height: 20px; font-size: 8px; }
+          #hud .cbtn.cReset { height: 26px; font-size: 7.5px; }
+          #hud .camGauge { width: 34px; height: 30px; }
+          #hud .camVal { font-size: 12px; height: 13px; line-height: 13px; }
+          /* display:block re-states what this layout's blanket miniLabel
+             display:none takes away: the rail's caption is the only thing
+             naming this column, so it survives the compact layout even though
+             the console's own captions do not. */
+          #hud .camBar .miniLabel {
+            display: block; font-size: 9px; letter-spacing: 1.6px;
+            height: 11px; line-height: 11px;
+          }
+          /* "?" joins the top strip next to PAUSE (which is 40px at right:196) */
+          #hud .helpBtn {
+            position: fixed; z-index: 9; width: 34px; height: 34px; font-size: 18px;
+            top: calc(5px + env(safe-area-inset-top, 0px));
+            right: calc(244px + env(safe-area-inset-right, 0px));
+          }
+          /* Narrow enough to sit BESIDE the 52px view rail instead of on top
+             of it: at 300px there was no x where the card cleared both the
+             control it points at and the rail full of controls it does not. */
+          #hud .coachCard { width: 264px; padding: 8px 11px 9px; border-radius: 12px; }
+          #hud .cBody { font-size: 13px; line-height: 1.3; }
+          #hud .cKicker { font-size: 9px; letter-spacing: 1.8px; }
+          #hud .coachCard.title .cKicker { font-size: 22px; letter-spacing: 1.2px; }
+          #hud .cFoot { margin-top: 7px; }
+          #hud .cSkip, #hud .cNext { height: 26px; padding: 0 10px; font-size: 11px; }
+          #hud .cTapHint { margin-top: 5px; font-size: 9px; }
+          /* the "?" is fixed up in the top strip on this layout, so its caption
+             follows it there rather than being orphaned in the rail */
+          #hud .helpCap {
+            position: fixed; z-index: 9; margin: 0; width: 34px; text-align: center;
+            font-size: 8px; letter-spacing: 1.4px;
+            top: calc(40px + env(safe-area-inset-top, 0px));
+            right: calc(244px + env(safe-area-inset-right, 0px));
+          }
+        }
       </style>
 
       <div class="windWrap">
@@ -1688,6 +2094,10 @@ export class UI {
             <span class="key">&#8592;</span><span class="key">&#8594;</span><span class="ht">MOVE</span>
             <span class="sep"></span>
             <span class="key">&#8593;</span><span class="key">&#8595;</span><span class="ht">AIM</span>
+            <span class="sep"></span>
+            <span class="key kw hZoomKey">WHEEL</span><span class="ht">ZOOM OUT</span>
+            <span class="sep"></span>
+            <span class="key kw hSurvey">SURVEY</span><span class="ht hSurveyCap">SEE BOTH</span>
           </div>
           <div class="row">
             <div class="col idBox">
@@ -1776,7 +2186,50 @@ export class UI {
       <div class="rotateOverlay">
         <div class="rotIcon">&#128241;</div>
         <div class="rotText">Rotate your device to play</div>
-      </div>`;
+      </div>
+
+      <div class="rightRail">
+        <div class="helpBtn" role="button" tabindex="-1"
+          aria-label="Replay the tutorial" title="How to play">?</div>
+        <!-- The "?" was a bare 30px glyph whose only identification was a
+             title tooltip: invisible to a mouse user who never hovers and to
+             every touch user alive. The rail names its other column (VIEW), so
+             this one gets a caption too. -->
+        <div class="helpCap">HELP</div>
+        <div class="camBar">
+          <span class="miniLabel">VIEW</span>
+          <div class="cbtn cIn" role="button" aria-label="Zoom in"
+            title="Zoom in (tighter view)">&#43;</div>
+          <div class="camGauge"><i class="camFill"></i><i class="camTicks"></i></div>
+          <div class="cbtn cOut" role="button" aria-label="Zoom out"
+            title="Zoom out (wider view)">&#8722;</div>
+          <div class="camVal">AIM</div>
+          <div class="cbtn wide cSurvey" role="button" aria-label="Survey the battlefield"
+            title="Frame both mobiles">SURVEY</div>
+          <div class="cbtn wide cReset" role="button" aria-label="Reset the view"
+            title="Back to the automatic camera">RESET VIEW</div>
+        </div>
+      </div>
+
+      <div class="coach" aria-live="polite">
+        <div class="coachSpot"></div>
+        <div class="coachCard">
+          <span class="cCaret"></span>
+          <div class="cHead">
+            <span class="cKicker"></span><span class="cCount"></span>
+          </div>
+          <div class="cBody"></div>
+          <div class="cFoot">
+            <div class="cDots"></div>
+            <div class="cSkip" role="button">SKIP</div>
+            <div class="cNext" role="button">NEXT &#9656;</div>
+          </div>
+          <div class="cTapHint"></div>
+        </div>
+      </div>
+      <!-- Skipping onboarding used to be silent and terminal. This plaque says
+           where the lesson went, pointed at the button that brings it back. -->
+      <div class="coachToast"></div>`;
 
     this.el = {
       windArrowWrap: root.querySelector('.windSvg .needleG'),
@@ -1829,6 +2282,28 @@ export class UI {
       tRight: root.querySelector('.tRight'),
       tUp: root.querySelector('.tUp'),
       tDown: root.querySelector('.tDown'),
+      // camera rail
+      rightRail: root.querySelector('.rightRail'),
+      camBar: root.querySelector('.camBar'),
+      camFill: root.querySelector('.camFill'),
+      camVal: root.querySelector('.camVal'),
+      camIn: root.querySelector('.cIn'),
+      camOut: root.querySelector('.cOut'),
+      helpBtn: root.querySelector('.helpBtn'),
+      helpCap: root.querySelector('.helpCap'),
+      coachToast: root.querySelector('.coachToast'),
+      // onboarding coach marks
+      coach: root.querySelector('.coach'),
+      coachSpot: root.querySelector('.coachSpot'),
+      coachCard: root.querySelector('.coachCard'),
+      cCaret: root.querySelector('.cCaret'),
+      cKicker: root.querySelector('.cKicker'),
+      cCount: root.querySelector('.cCount'),
+      cBody: root.querySelector('.cBody'),
+      cDots: root.querySelector('.cDots'),
+      cSkip: root.querySelector('.cSkip'),
+      cNext: root.querySelector('.cNext'),
+      cTapHint: root.querySelector('.cTapHint'),
     };
 
     // Touch devices get on-screen controls (wired in bindTouch).
@@ -1906,6 +2381,757 @@ export class UI {
     // Paint the two console item sprites (dual shot + teleport).
     paintItem(root.querySelector('.itemC1'), 'dual');
     paintItem(root.querySelector('.itemC2'), 'teleport');
+
+    // ---- camera rail + first-run coaching --------------------------------
+    // Callback slot fired when onboarding closes (assignable by game code).
+    this.onTutorialEnd = null;
+    this._zoom = -1;           // last level handed to setZoom (0 tight .. 1 wide)
+    this._zoomManual = false;  // player has taken the camera off automatic
+    this._tutOpen = false;
+    this._tutStep = 0;
+    this._tutSeen = false;      // onboarding has run (or been dismissed) already
+    this._tutCancelled = false; // player started playing before it could open
+    this._coachRaf = 0;
+    this._coachKey = '';        // last applied coach geometry (skips redundant writes)
+    this._tutShown = -1;        // step index currently rendered (-1 = none)
+    this._tutGate = false;      // this step waits for a real input, not a click
+    this._tutCharging = false;  // the gate's charge is live (time may pass)
+    this._thaw = null;          // undo for the match-clock freeze
+    this._tutTimer = null;      // clock reading when the coach took over
+    this._tutBanner = null;     // banner suppressed while the coach is up
+    this._coachIdle = false;    // player is fiddling; the card stands aside
+    this._idleT = 0;
+    this._held = new Set();     // control keys held right now
+    this._holdT = 0;
+    this._holdStart = 0;
+    this._holdAcc = 0;          // ms of sustained control input this session
+    this._gateT = 0;
+    this._camDemoT = 0;
+    this._camDemoTok = 0;
+    this._toastT = 0;
+    this._steps = this._buildSteps();
+    this._bindCamRail();
+    this._bindCoach();
+    this._publishUi();
+    this._maybeAutoOnboard();
+  }
+
+  // The camera half of this feature owns window.__GB (src/main.js). Attach the
+  // UI instance defensively — additively, never clobbering — so the shared
+  // hook exists whichever half of the pair lands first.
+  _publishUi() {
+    const attach = () => {
+      try { const G = window.__GB; if (G && !G.ui) G.ui = this; } catch { /* ignore */ }
+    };
+    // main.js assigns window.__GB after `new UI()` returns, so the first
+    // attempt has to wait for the module body to finish.
+    queueMicrotask(attach);
+    requestAnimationFrame(attach);
+  }
+
+  /* ================= camera / view controls ==========================
+     ui.setZoom(level, manual) is the contract the camera rig calls every time
+     the framing changes: level 0 = tightest, 1 = widest, manual = the player
+     has taken control (which is what raises RESET VIEW). */
+  setZoom(level, manual) {
+    const t = Math.max(0, Math.min(1, Number(level) || 0));
+    const man = !!manual;
+    if (t === this._zoom && man === this._zoomManual) return;
+    this._zoom = t;
+    this._zoomManual = man;
+    if (this.el.camFill) this.el.camFill.style.height = `${(9 + t * 91).toFixed(1)}%`;
+    // A word, not a fake magnification factor: the rig's zoom curve is its own
+    // business, and "2.4x" of nothing in particular would be a lie.
+    const word = t < 0.06 ? 'AIM' : t < 0.34 ? 'CLOSE' : t < 0.62 ? 'MID'
+      : t < 0.9 ? 'WIDE' : 'MAX';
+    if (this.el.camVal && this.el.camVal.textContent !== word)
+      this.el.camVal.textContent = word;
+    if (this.el.camBar) this.el.camBar.classList.toggle('manual', man);
+    // A stepper with nothing left to give goes dead-looking. Pressing "-" at
+    // the widest legal lens moves nothing; an undimmed button that does
+    // nothing reads as a broken game, not as a limit.
+    if (this.el.camOut) this.el.camOut.classList.toggle('dim', t >= 0.995);
+    if (this.el.camIn) this.el.camIn.classList.toggle('dim', t <= 0.005);
+  }
+
+  // Current zoom level as the HUD understands it (0..1). Additive helper.
+  zoomIndicator() { return this._zoom; }
+
+  // SURVEY / RESET VIEW, also reachable from the hint strip. Both drive the
+  // camera through the shared window.__GB hooks and then mirror the result, so
+  // the indicator is right even if the rig does not call back.
+  cameraSurvey() {
+    const G = this._hooks();
+    if (G && typeof G.survey === 'function') G.survey();
+    const lv = G && typeof G.zoomLevel === 'function' ? G.zoomLevel() : 1;
+    this.setZoom(lv, true);
+  }
+
+  cameraReset() {
+    const G = this._hooks();
+    if (G && typeof G.resetCamera === 'function') G.resetCamera();
+    const lv = G && typeof G.zoomLevel === 'function' ? G.zoomLevel() : 0;
+    this.setZoom(lv, false);
+  }
+
+  _hooks() { try { return window.__GB || null; } catch { return null; } }
+
+  // dir -1 = tighter, +1 = wider.
+  _camStep(dir) {
+    const G = this._hooks();
+    const cur = G && typeof G.zoomLevel === 'function' ? G.zoomLevel() : this._zoom;
+    const t = Math.max(0, Math.min(1, (Number(cur) || 0) + dir * ZOOM_STEP));
+    if (G && typeof G.setZoomLevel === 'function') G.setZoomLevel(t);
+    this.setZoom(t, true);
+  }
+
+  _bindCamRail() {
+    const tap = (el, fn) => {
+      if (!el) return;
+      el.addEventListener('pointerdown', (e) => {
+        e.preventDefault(); e.stopPropagation(); fn();
+      });
+      el.addEventListener('contextmenu', (e) => e.preventDefault());
+    };
+    tap(this.root.querySelector('.cIn'), () => this._camStep(-1));
+    tap(this.root.querySelector('.cOut'), () => this._camStep(1));
+    tap(this.root.querySelector('.cSurvey'), () => this.cameraSurvey());
+    tap(this.root.querySelector('.cReset'), () => this.cameraReset());
+    // The hint strip's SURVEY chip is a live control, not a caption: a player
+    // who skips onboarding still meets the feature.
+    tap(this.root.querySelector('.hSurvey'), () => this.cameraSurvey());
+    // The strip names the gesture the player actually has: wheel + TAB on a
+    // desktop (see src/input.js), pinch + the SURVEY chip itself on touch.
+    const zk = this.root.querySelector('.hZoomKey');
+    if (zk) zk.textContent = this.isTouch ? 'PINCH' : 'WHEEL';
+    const sk = this.root.querySelector('.hSurvey');
+    const sc = this.root.querySelector('.hSurveyCap');
+    if (sk && sc) {
+      sk.textContent = this.isTouch ? 'SURVEY' : 'TAB';
+      sc.textContent = this.isTouch ? 'SEE BOTH' : 'SURVEY';
+    }
+    this.setZoom(0, false);
+  }
+
+  /* ================= first-run onboarding ============================ */
+
+  // Public API (frozen contract): startTutorial / isTutorialOpen /
+  // tutorialNext / tutorialStepCount / onTutorialEnd.
+  startTutorial() {
+    if (!this.el.coach || this._tutOpen) return;
+    this._tutOpen = true;
+    this._tutStep = 0;
+    this._tutShown = -1;
+    this._coachKey = '';
+    this._held.clear();
+    this._holdAcc = 0;
+    clearTimeout(this._holdT); this._holdT = 0;
+    // The match clock does NOT run while a stranger is reading. Six paragraphs
+    // take a human 30-60s; a 20s turn clock ticking underneath them meant the
+    // first thing onboarding taught was that you had already forfeited.
+    this._freezeGame();
+    // The turn banner is the loudest thing on screen and step 1 is drawn on top
+    // of it. It is re-popped the moment the coach closes, which is where it
+    // actually means something: the match is live NOW.
+    this._bannerHide();
+    this.el.coach.classList.add('on');
+    this.root.classList.add('coaching');
+    this._renderStep();
+    if (!this._coachRaf) this._coachLoop();
+  }
+
+  isTutorialOpen() { return !!this._tutOpen; }
+
+  tutorialStepCount() { return this._steps.length; }
+
+  tutorialNext() {
+    if (!this._tutOpen) return;
+    if (this._tutStep >= this._steps.length - 1) { this.endTutorial(); return; }
+    this._tutStep += 1;
+    this._coachKey = '';
+    this._renderStep();
+  }
+
+  // `completed` is false for the paths that are NOT a considered decision — a
+  // stray control key, a reload mid-lesson. Those leave the "seen" flag unset
+  // so the coach is offered again next time instead of vanishing forever.
+  endTutorial(completed = true) {
+    if (!this._tutOpen) return;
+    this._leaveStep(this._tutShown);
+    clearTimeout(this._holdT); this._holdT = 0;
+    clearTimeout(this._idleT); this._idleT = 0;
+    this._held.clear();
+    this._tutOpen = false;
+    this._tutShown = -1;
+    this.el.coach.classList.remove('on');
+    this.root.classList.remove('coaching', 'coachIdle', 'coachGate', 'coachCam');
+    if (this._coachRaf) { cancelAnimationFrame(this._coachRaf); this._coachRaf = 0; }
+    // Hand the match back: clock restored to what it read when the coach took
+    // over (a full turn, on a first run), camera back on automatic.
+    this._thawGame();
+    this._camDemo(false);
+    if (completed) { this._tutSeen = true; this._markOnboarded(); }
+    // Whatever the coach swallowed gets its moment now.
+    if (this._tutBanner) {
+      const [text, ms] = this._tutBanner;
+      this._tutBanner = null;
+      this.banner(text, ms);
+    } else {
+      this._bannerPop(1200);
+    }
+    const cb = this.onTutorialEnd;
+    if (typeof cb === 'function') {
+      try { cb(); } catch (err) { console.warn('onTutorialEnd threw:', err); }
+    }
+  }
+
+  /* ---- the match clock, while the coach is up -------------------------
+     src/main.js drives game.update(dt) unconditionally and knows nothing about
+     onboarding, so the HUD takes the clock into its own hands for exactly as
+     long as it is talking. dt is zeroed (nothing ages: no timer, no AI), with
+     one exception — the charge lesson, where the gauge has to fill for real
+     under the player's thumb. The clock is pinned in both cases. Every patch
+     is an own-property shadow and is removed again on close. */
+  _game() { const G = this._hooks(); return (G && G.game) || null; }
+
+  _freezeGame() {
+    if (this._thaw) return;
+    const g = this._game();
+    if (!g || typeof g.update !== 'function' || typeof g.input !== 'function') return;
+    const ui = this;
+    const origUpdate = g.update, origInput = g.input;
+    this._tutTimer = typeof g.timer === 'number' ? g.timer : null;
+
+    g.update = function (dt) {
+      if (!ui._tutOpen) return origUpdate.call(this, dt);
+      const live = ui._tutCharging && this.state === 'charging';
+      const t0 = this.timer;
+      const r = origUpdate.call(this, live ? dt : 0);
+      if (this.timer !== t0) { this.timer = t0; ui.setTimer(t0); }
+      return r;
+    };
+
+    g.input = function (cmd, dt) {
+      if (!ui._tutOpen) return origInput.call(this, cmd, dt);
+      // Nothing launches a shell mid-lesson. Aim and movement stay live, so a
+      // player who wants to fiddle while reading can (see _coachStandAside).
+      if (cmd === 'fireFull') return undefined;
+      if (cmd === 'chargeStart') {
+        if (!ui._tutGate) return undefined;
+        ui._tutCharging = true;
+        ui.notifyCharge('start');
+        return origInput.call(this, cmd, dt);
+      }
+      if (cmd === 'chargeRelease') {
+        const was = ui._tutCharging;
+        ui._tutCharging = false;
+        // Dry fire: the gauge filled and drains, no shell, no turn consumed.
+        if (this.state === 'charging') { this.state = 'aim'; this.power = 0; ui.setPower(0); }
+        if (was) ui.notifyCharge('release');
+        return undefined;
+      }
+      return origInput.call(this, cmd, dt);
+    };
+
+    this._thaw = () => {
+      g.update = origUpdate;
+      g.input = origInput;
+      if (this._tutTimer != null) { g.timer = this._tutTimer; this.setTimer(this._tutTimer); }
+      if (g.state === 'charging') { g.state = 'aim'; g.power = 0; this.setPower(0); }
+      // The composition pass reads this to decide whether the player is lining
+      // up a shot; a lesson is not aiming.
+      if (typeof g._aimActiveT === 'number') g._aimActiveT = 0;
+    };
+  }
+
+  _thawGame() {
+    const f = this._thaw;
+    this._thaw = null;
+    this._tutCharging = false;
+    if (f) { try { f(); } catch (err) { console.warn('coach thaw threw:', err); } }
+  }
+
+  // Called on charge start/release while the gate step is up. Public and
+  // additive: game code may call it directly instead of relying on the patch.
+  notifyCharge(phase) {
+    if (!this._tutOpen || !this._tutGate) return;
+    if (phase === 'start') {
+      this._gateTried = true;
+      if (this.el.cTapHint) this.el.cTapHint.textContent = this.isTouch
+        ? 'NOW LET GO' : 'NOW RELEASE';
+    } else if (phase === 'release') {
+      this._tutGate = false;
+      this.tutorialNext();
+    }
+  }
+
+  // Each step is ONE sentence, anchored to the real HUD element it describes.
+  // `sel` is an ordered candidate list: the layouts hide different controls
+  // (the console's power trough is gone on phone landscape, where FIRE carries
+  // the charge), so the first VISIBLE anchor wins.
+  _buildSteps() {
+    const touch = this.isTouch;
+    return [
+      // Identity and objective first. A stranger's first frame used to be a
+      // card headed "WHOSE TURN — 1 / 6" over a match already in progress; the
+      // game never said its own name or what winning meant.
+      {
+        kicker: 'THUNDERBOUND',
+        title: true,
+        sel: [],
+        text: 'A turn-based artillery duel. You and the rival lob shells across the map &mdash; first to empty the other&rsquo;s HP bar wins. Six quick steps, or hit <b>SKIP</b>. The clock is paused while we talk.',
+      },
+      {
+        kicker: 'WHOSE TURN',
+        sel: ['.players.left .pcard', '.players.left'],
+        text: 'You are the mobile on the <b>left</b> &mdash; the glowing card is whoever is up, and you win by emptying the rival&rsquo;s HP bar first.',
+      },
+      {
+        kicker: 'ANGLE',
+        sel: ['.angleBox', '.aimC', '.angleChip'],
+        text: touch
+          ? 'Tap <b>&#9652;</b> / <b>&#9662;</b> on the AIM pad to tilt your barrel &mdash; this readout is the launch angle in degrees.'
+          : 'Hold <b>&#8593;</b> / <b>&#8595;</b> to tilt your barrel &mdash; this readout is the launch angle in degrees (<b>&#8592;</b> / <b>&#8594;</b> walks you along the ground).',
+      },
+      // The least obvious control in the genre, and the whole reason onboarding
+      // exists. Taught as a sentence with a NEXT button, a player could finish
+      // the tutorial having never held the key. This step is a GATE: it watches
+      // the real gauge fill and advances on the release. Nothing is fired.
+      {
+        kicker: 'POWER',
+        hold: true,
+        sel: touch ? ['.fireBtn', '.powerBox', '.fireCol'] : ['.powerBox', '.fireCol', '.fireBtn'],
+        text: touch
+          ? 'Power is a <b>hold</b>. Try it now: press and hold <b>FIRE</b> and watch the ring charge, then let go. This one is practice &mdash; nothing is fired.'
+          : 'Power is a <b>hold</b>. Try it now: hold <b>SPACE</b> and watch this gauge fill, then release. This one is practice &mdash; nothing is fired.',
+      },
+      {
+        kicker: 'WIND',
+        sel: ['.windPlate', '.windWrap'],
+        text: 'The wind blows your shell sideways for its whole flight &mdash; the arrow is which way, the number is how hard, so aim into it.',
+      },
+      // Demonstrate, do not assert. "Can't see the rival?" was asked over a
+      // wide establishing shot with the rival plainly in frame, which reads as
+      // "this feature is not for you". The step now pushes the lens in to the
+      // aiming framing and pulls it back out under the card, so the player
+      // watches the thing the words are about.
+      {
+        kicker: 'SEE YOUR TARGET',
+        cam: true,
+        sel: ['.camBar', '.rightRail'],
+        text: touch
+          ? 'Aiming pushes in tight. <b>Pinch</b> the battlefield to pull back &mdash; or use this rail: <b>&minus;</b> widens, <b>SURVEY</b> frames both mobiles, <b>RESET VIEW</b> hands the camera back.'
+          : 'Aiming pushes in tight. Roll the <b>WHEEL</b> (or the <b>&minus;</b> here) to pull back and see the whole battlefield &mdash; <b>TAB</b> frames both mobiles, <b>RESET VIEW</b> snaps back.',
+      },
+      {
+        kicker: 'TURN TIMER',
+        sel: ['.timerBox', '.timerRing'],
+        text: 'Every turn is on the clock &mdash; when this ring empties your shot is forfeit and the rival takes aim. It has been <b>held</b> while you read; your full turn starts when this closes.',
+      },
+    ];
+  }
+
+  _bindCoach() {
+    const c = this.el.coach;
+    if (!c) return;
+    for (let i = 0; i < this._steps.length; i++)
+      this.el.cDots.appendChild(document.createElement('i'));
+    this.el.cTapHint.textContent = this.isTouch
+      ? 'TAP ANYWHERE TO CONTINUE' : 'CLICK ANYWHERE OR PRESS ENTER';
+    // Anywhere advances; SKIP and NEXT swallow the event so they cannot
+    // advance-then-act twice. The gate step turns the scrim inert instead
+    // (see _renderStep), so on that step nothing here is reachable at all.
+    c.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      if (this._tutGate) return;
+      this.tutorialNext();
+    });
+    c.addEventListener('contextmenu', (e) => e.preventDefault());
+    this.el.cSkip.addEventListener('pointerdown', (e) => {
+      e.preventDefault(); e.stopPropagation(); this._skipTutorial();
+    });
+    this.el.cNext.addEventListener('pointerdown', (e) => {
+      e.preventDefault(); e.stopPropagation(); this.tutorialNext();
+    });
+    // Keyboard. Captured on the way DOWN so src/input.js never sees it: Enter
+    // is "fire at full power", and advancing a coach step must not launch a
+    // shell. Escape skips.
+    window.addEventListener('keydown', (e) => {
+      const yields = COACH_YIELD.has(e.code);
+      // Not open yet: a player already on the controls does not want a lesson.
+      if (!this._tutOpen) { if (yields) this._tutCancelled = true; return; }
+      if (yields) {
+        // Space IS the lesson on the gate step — let it through untouched.
+        if (this._tutGate && e.code === 'Space') return;
+        // Otherwise: stand aside, do NOT self-destruct. Step 2 literally says
+        // "hold up/down", so the arrow key it invites cannot be the key that
+        // ends onboarding forever.
+        this._coachStandAside(e.code);
+        return;
+      }
+      if (e.code === 'Enter' || e.code === 'NumpadEnter') {
+        e.preventDefault(); e.stopPropagation();
+        if (!this._tutGate) this.tutorialNext();
+      } else if (e.code === 'Escape') {
+        e.preventDefault(); e.stopPropagation(); this._skipTutorial();
+      }
+    }, true);
+    window.addEventListener('keyup', (e) => {
+      if (this._tutOpen && COACH_YIELD.has(e.code)) this._coachKeyUp(e.code);
+    }, true);
+    // Every stand-aside is armed against a wall clock, and a backgrounded tab
+    // stops delivering keyup. Coming back to a dimmed card with a stale budget
+    // would be baffling, so a blur resets the whole idle state.
+    window.addEventListener('blur', () => {
+      if (this._tutOpen) { this._held.clear(); this._coachKeyUp(null); }
+    });
+    if (this.el.helpBtn) {
+      this.el.helpBtn.addEventListener('pointerdown', (e) => {
+        e.preventDefault(); e.stopPropagation();
+        if (this._tutOpen) this.endTutorial(); else this.startTutorial();
+      });
+      this.el.helpBtn.addEventListener('contextmenu', (e) => e.preventDefault());
+    }
+  }
+
+  // A deliberate exit (SKIP / Escape) counts as a decision, so it marks the
+  // player onboarded — but it says where the lesson went first. The "?" is a
+  // 30px glyph in the corner; "SKIP" next to "2 / 7" reads as terminal.
+  _skipTutorial() {
+    this.endTutorial(true);
+    this._toast(this.isTouch
+      ? 'TAP ? ANY TIME FOR THE BASICS' : 'PRESS ? ANY TIME FOR THE BASICS');
+  }
+
+  _toast(text, ms = 2600) {
+    const t = this.el.coachToast, b = this.el.helpBtn;
+    if (!t) return;
+    t.textContent = text;
+    if (b) {
+      const r = b.getBoundingClientRect();
+      // Measure first, then park it under the "?" wherever the layout put it.
+      t.style.visibility = 'hidden'; t.style.left = '0px'; t.style.top = '0px';
+      t.classList.add('on');
+      const w = t.offsetWidth, h = t.offsetHeight;
+      const left = Math.max(8, Math.min(innerWidth - w - 8, r.left + r.width / 2 - w / 2));
+      let top = r.bottom + 8;
+      if (top + h > innerHeight - 8) top = Math.max(8, r.top - 8 - h);
+      t.style.left = `${Math.round(left)}px`;
+      t.style.top = `${Math.round(top)}px`;
+      t.style.visibility = '';
+      b.classList.remove('pulse');
+      void b.offsetWidth;
+      b.classList.add('pulse');
+    } else {
+      t.classList.add('on');
+    }
+    clearTimeout(this._toastT);
+    this._toastT = setTimeout(() => {
+      t.classList.remove('on');
+      if (b) b.classList.remove('pulse');
+    }, ms);
+  }
+
+  // Fiddling with the controls dims the card out of the way (and hands the
+  // pointer back) instead of destroying the lesson; it returns on its own a
+  // beat after the last key. Only SUSTAINED input — more than a couple of
+  // seconds of it, cumulative — is read as "I would rather play than read",
+  // and even that closes the coach as NOT completed, so it comes back.
+  _coachStandAside(code) {
+    if (!this._tutOpen) return;
+    if (!this._coachIdle) {
+      this._coachIdle = true;
+      this.root.classList.add('coachIdle');
+    }
+    if (code) this._held.add(code);
+    clearTimeout(this._idleT);
+    this._idleT = 0;
+    if (!this._holdT) {
+      this._holdStart = Date.now();
+      const left = Math.max(200, COACH_HOLD_BUDGET - this._holdAcc);
+      this._holdT = setTimeout(() => {
+        this._holdT = 0;
+        this._holdAcc = COACH_HOLD_BUDGET;
+        if (this._tutOpen) this.endTutorial(false);
+      }, left);
+    }
+  }
+
+  _coachKeyUp(code) {
+    if (code) this._held.delete(code);
+    if (this._held.size) return;
+    if (this._holdT) {
+      clearTimeout(this._holdT);
+      this._holdT = 0;
+      this._holdAcc += Date.now() - this._holdStart;
+    }
+    if (!this._coachIdle) return;
+    clearTimeout(this._idleT);
+    this._idleT = setTimeout(() => this._coachResume(), 450);
+  }
+
+  _coachResume() {
+    clearTimeout(this._idleT);
+    this._idleT = 0;
+    if (!this._coachIdle) return;
+    this._coachIdle = false;
+    this.root.classList.remove('coachIdle');
+    this._coachKey = '';
+  }
+
+  // The camera step's demonstration: push in to the aiming lens, then widen
+  // under the card. Tokened, because the harness (and an impatient player) can
+  // leave the step before the timer fires.
+  _camDemo(on) {
+    const tok = ++this._camDemoTok;
+    clearTimeout(this._camDemoT);
+    this._camDemoT = 0;
+    const G = this._hooks();
+    if (!G) return;
+    if (!on) {
+      try { if (typeof G.resetCamera === 'function') G.resetCamera(); } catch { /* ignore */ }
+      return;
+    }
+    try { if (typeof G.setZoomLevel === 'function') G.setZoomLevel(0.1); } catch { /* ignore */ }
+    this._camDemoT = setTimeout(() => {
+      if (tok !== this._camDemoTok || !this._tutOpen) return;
+      try { if (typeof G.setZoomLevel === 'function') G.setZoomLevel(1); } catch { /* ignore */ }
+    }, 850);
+  }
+
+  _gateOff() {
+    clearTimeout(this._gateT);
+    this._gateT = 0;
+    this._tutGate = false;
+    this._gateTried = false;
+    this._tutCharging = false;
+    const g = this._game();
+    if (g && g.state === 'charging') { g.state = 'aim'; g.power = 0; this.setPower(0); }
+    if (this.el.cNext) this.el.cNext.classList.remove('hid');
+    if (this.el.cTapHint) this.el.cTapHint.classList.remove('act');
+  }
+
+  // Tear down whatever the step we are leaving switched on.
+  _leaveStep(i) {
+    const st = i >= 0 ? this._steps[i] : null;
+    this._gateOff();
+    this._coachResume();
+    if (st && st.cam) this._camDemo(false);
+    this.root.classList.remove('coachGate', 'coachCam');
+  }
+
+  _renderStep() {
+    const n = this._steps.length;
+    const i = Math.max(0, Math.min(n - 1, this._tutStep));
+    if (this._tutShown !== i) this._leaveStep(this._tutShown);
+    const st = this._steps[i];
+    this.el.cKicker.textContent = st.kicker;
+    this.el.cCount.textContent = `${i + 1} / ${n}`;
+    this.el.cBody.innerHTML = st.text;
+    this.el.cNext.innerHTML = i === n - 1 ? 'PLAY &#9656;' : 'NEXT &#9656;';
+    this.el.coachCard.classList.toggle('title', !!st.title);
+    const dots = this.el.cDots.children;
+    for (let k = 0; k < dots.length; k++) dots[k].classList.toggle('on', k <= i);
+
+    // Default advance affordance; the gate step overrides it below.
+    this.el.cTapHint.textContent = this.isTouch
+      ? 'TAP ANYWHERE TO CONTINUE' : 'CLICK ANYWHERE OR PRESS ENTER';
+
+    // Interaction gate: no NEXT, no click-to-advance — hold the control, watch
+    // the real gauge move, release. An escape hatch appears after 6s so a
+    // player who cannot (or will not) do it is never trapped.
+    if (st.hold) {
+      this._tutGate = true;
+      this._gateTried = false;
+      this.root.classList.add('coachGate');
+      this.el.cNext.classList.add('hid');
+      this.el.cTapHint.classList.add('act');
+      this.el.cTapHint.textContent = this.isTouch
+        ? 'HOLD FIRE TO CHARGE, THEN LET GO' : 'HOLD SPACE TO CHARGE, THEN RELEASE';
+      clearTimeout(this._gateT);
+      this._gateT = setTimeout(() => {
+        if (!this._tutOpen || this._tutShown !== i) return;
+        this.el.cNext.classList.remove('hid');
+      }, 6000);
+    }
+
+    // Camera step: force the reserved RESET VIEW slot visible (the copy names
+    // it), demonstrate the zoom rather than asserting it, and hand the pointer
+    // back so the player can pinch / roll / press the rail while the card is
+    // still up. The scrim being inert means NEXT does the advancing here.
+    if (st.cam) {
+      this.root.classList.add('coachCam');
+      this.el.cTapHint.textContent = 'TRY IT — THEN HIT NEXT';
+      this._camDemo(true);
+    }
+
+    this._tutShown = i;
+    // retrigger the plaque pop on every step
+    this.el.coachCard.style.animation = 'none';
+    void this.el.coachCard.offsetWidth;
+    this.el.coachCard.style.animation = '';
+    this._coachKey = '';
+    this._coachPlace();
+  }
+
+  // Anchor the spotlight + plaque to the live HUD element. Re-run every frame
+  // while open (two rects and a couple of style writes, and only when the
+  // geometry actually changed) so it survives resizes, orientation flips and
+  // controls that appear mid-turn.
+  _coachLoop() {
+    const step = () => {
+      if (!this._tutOpen) { this._coachRaf = 0; return; }
+      this._coachPlace();
+      this._coachRaf = requestAnimationFrame(step);
+    };
+    this._coachRaf = requestAnimationFrame(step);
+  }
+
+  _firstVisibleEl(sels) {
+    for (const s of sels || []) {
+      const el = this.root.querySelector(s);
+      if (!el) continue;
+      const r = el.getBoundingClientRect();
+      if (r.width > 4 && r.height > 4) return el;
+    }
+    return null;
+  }
+
+  _firstVisible(sels) {
+    const el = this._firstVisibleEl(sels);
+    return el ? el.getBoundingClientRect() : null;
+  }
+
+  // Controls the plaque must not sit on top of. The old solver only avoided
+  // the element it was pointing AT, which is fine on a 1600px desktop and
+  // ruinous on a phone: the ANGLE card covered the entire view rail, and the
+  // POWER card covered the HOLD TO CHARGE cap it was describing.
+  _keepClear(anchor) {
+    const sels = ['.camBar', '.helpBtn', '.aimC', '.moveC', '.wsel',
+      '.fireBtn', '.fireCap', '.timerBox', '.pauseBtn', '.windPlate',
+      '.players.left', '.players.right'];
+    const out = [];
+    for (const s of sels) {
+      const el = this.root.querySelector(s);
+      if (!el) continue;
+      // Never fight the control this step is about.
+      if (anchor && (el === anchor || el.contains(anchor) || anchor.contains(el))) continue;
+      const r = el.getBoundingClientRect();
+      if (r.width > 4 && r.height > 4) out.push(r);
+    }
+    return out;
+  }
+
+  _coachPlace() {
+    if (!this._tutOpen) return;
+    const st = this._steps[this._tutStep];
+    const card = this.el.coachCard, spot = this.el.coachSpot;
+    const W = this.root.clientWidth || 1, H = this.root.clientHeight || 1;
+    const anchor = st ? this._firstVisibleEl(st.sel) : null;
+    const r = anchor ? anchor.getBoundingClientRect() : null;
+    const cw = card.offsetWidth, ch = card.offsetHeight;
+    const pad = 8, tether = 15, edge = 10;
+    let side = 'none', left, top, caret = 0;
+    if (r) {
+      const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+      const clearRects = this._keepClear(anchor);
+      const spotR = {
+        left: r.left - pad, top: r.top - pad,
+        right: r.right + pad, bottom: r.bottom + pad,
+      };
+      const overlap = (a, b) =>
+        Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left)) *
+        Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top));
+      // Tethered placements first (a caret pointing at the control is worth a
+      // lot), then the untethered fallbacks. Ties keep this order.
+      const cand = [
+        { side: 'below', x: cx - cw / 2, y: r.bottom + tether, bias: cy < H * 0.5 ? 0 : 260 },
+        { side: 'above', x: cx - cw / 2, y: r.top - tether - ch, bias: cy < H * 0.5 ? 260 : 0 },
+        { side: 'leftOf', x: r.left - tether - cw, y: cy - ch / 2, bias: 120 },
+        { side: 'rightOf', x: r.right + tether, y: cy - ch / 2, bias: 120 },
+        { side: 'none', x: edge, y: edge, bias: 900 },
+        { side: 'none', x: W - cw - edge, y: edge, bias: 900 },
+        { side: 'none', x: edge, y: H - ch - edge, bias: 900 },
+        { side: 'none', x: W - cw - edge, y: H - ch - edge, bias: 900 },
+        { side: 'none', x: (W - cw) / 2, y: (H - ch) / 2, bias: 1100 },
+      ];
+      let best = null;
+      for (const c of cand) {
+        const x = Math.max(edge, Math.min(W - cw - edge, c.x));
+        const y = Math.max(edge, Math.min(H - ch - edge, c.y));
+        const rect = { left: x, top: y, right: x + cw, bottom: y + ch };
+        // Covering the spotlight is four times worse than covering some other
+        // control: the step is pointing at it.
+        let cost = overlap(rect, spotR) * 4 + c.bias;
+        for (const k of clearRects) cost += overlap(rect, k);
+        if (!best || cost < best.cost) best = { cost, x, y, side: c.side };
+      }
+      side = best.side; left = best.x; top = best.y;
+      caret = (side === 'leftOf' || side === 'rightOf')
+        ? Math.max(16, Math.min(ch - 16, cy - top))
+        : Math.max(20, Math.min(cw - 20, cx - left));
+    } else {
+      left = (W - cw) / 2; top = (H - ch) / 2;
+    }
+    const key = `${side}|${Math.round(left)}|${Math.round(top)}|${Math.round(caret)}|` +
+      (r ? `${Math.round(r.left)},${Math.round(r.top)},${Math.round(r.width)},${Math.round(r.height)}` : 'x');
+    if (key === this._coachKey) return;
+    this._coachKey = key;
+    if (r) {
+      spot.style.display = 'block';
+      spot.style.left = `${Math.round(r.left - pad)}px`;
+      spot.style.top = `${Math.round(r.top - pad)}px`;
+      spot.style.width = `${Math.round(r.width + pad * 2)}px`;
+      spot.style.height = `${Math.round(r.height + pad * 2)}px`;
+    } else {
+      // No anchor on this layout: the hole parks offscreen, so the scrim is
+      // whole and the plaque simply centres.
+      spot.style.display = 'block';
+      spot.style.left = '-60px'; spot.style.top = '-60px';
+      spot.style.width = '0px'; spot.style.height = '0px';
+    }
+    card.classList.remove('below', 'above', 'leftOf', 'rightOf', 'none');
+    card.classList.add(side);
+    card.style.left = `${Math.round(left)}px`;
+    card.style.top = `${Math.round(top)}px`;
+    const cr = this.el.cCaret;
+    if (side === 'leftOf' || side === 'rightOf') {
+      cr.style.top = `${Math.round(caret - 11)}px`; cr.style.left = '';
+    } else {
+      cr.style.left = `${Math.round(caret - 11)}px`; cr.style.top = '';
+    }
+  }
+
+  _onboarded() {
+    try { if (window.localStorage && localStorage.getItem(ONBOARD_KEY)) return true; } catch { /* blocked */ }
+    try { if (window.sessionStorage && sessionStorage.getItem(ONBOARD_KEY)) return true; } catch { /* blocked */ }
+    return this._tutSeen;
+  }
+
+  _markOnboarded() {
+    try { localStorage.setItem(ONBOARD_KEY, '1'); } catch { /* blocked */ }
+    try { sessionStorage.setItem(ONBOARD_KEY, '1'); } catch { /* blocked */ }
+  }
+
+  // First visit only. ?coach=1 forces it (for review captures), ?coach=0
+  // suppresses it. Opening is frame-counted rather than wall-clocked so
+  // fixed-dt capture runs behave identically, and it stands down if the player
+  // has already grabbed the controls.
+  _maybeAutoOnboard() {
+    let force = null;
+    try {
+      const p = new URLSearchParams(location.search);
+      if (p.has('coach')) force = p.get('coach') !== '0';
+    } catch { /* ignore */ }
+    if (force === false) return;
+    if (force !== true && this._onboarded()) return;
+    let n = 0;
+    const step = () => {
+      if (this._tutSeen || this._tutOpen || this._tutCancelled) return;
+      if (++n >= 24) { this.startTutorial(); return; }
+      requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
   }
 
   // Wire the on-screen touch buttons to the Input instance (press/release with
@@ -2147,9 +3373,42 @@ export class UI {
     this.el.timerRing.classList.toggle('low', t <= 5 && t > 0);
   }
 
+  // Park / re-pop the plaque without re-running any turn bookkeeping. The
+  // coach hides it (step 1's card is drawn where it lives) and pops it again
+  // on close, where "YOUR TURN" is finally news.
+  _bannerHide() {
+    if (!this.el.banner) return;
+    clearTimeout(this._bt);
+    cancelAnimationFrame(this._bRaf);
+    this.el.banner.classList.remove('show');
+  }
+
+  _bannerPop(ms = 1600) {
+    const b = this.el.banner;
+    if (!b || !this.el.bFill || !this.el.bFill.textContent) return;
+    b.classList.remove('show');
+    void b.offsetWidth;
+    b.classList.add('show');
+    clearTimeout(this._bt);
+    cancelAnimationFrame(this._bRaf);
+    if (ms <= 0) return;
+    // Dismiss after N *frames* (60fps equivalent) rather than wall-clock ms
+    // so slow/fixed-dt rendering keeps banner timing in sync with the game.
+    const frames = Math.max(1, Math.round((ms / 1000) * 60));
+    let n = 0;
+    const step = () => {
+      if (++n >= frames) b.classList.remove('show');
+      else this._bRaf = requestAnimationFrame(step);
+    };
+    this._bRaf = requestAnimationFrame(step);
+  }
+
   banner(text, ms = 1600) {
     // Damage-style payloads ("-12") get the floating damage treatment instead.
     if (/^-\d+$/.test(text)) { this.showDamage(text); return; }
+    // The coach owns the screen while it is up: a plaque popping over the card
+    // that is explaining that very plaque is noise. Held, and replayed on close.
+    if (this._tutOpen) { this._tutBanner = [text, ms]; return; }
     // Water hits are an impact result, not a turn announcement: they belong at
     // the splash, not on a plaque across the middle of the frame.
     if (/^splash/i.test(text)) {
@@ -2175,23 +3434,7 @@ export class UI {
     }
     this.el.bStroke.textContent = text;
     this.el.bFill.textContent = text;
-    // retrigger pop animation
-    this.el.banner.classList.remove('show');
-    void this.el.banner.offsetWidth;
-    this.el.banner.classList.add('show');
-    clearTimeout(this._bt);
-    cancelAnimationFrame(this._bRaf);
-    if (ms > 0) {
-      // Dismiss after N *frames* (60fps equivalent) rather than wall-clock ms
-      // so slow/fixed-dt rendering keeps banner timing in sync with the game.
-      const frames = Math.max(1, Math.round((ms / 1000) * 60));
-      let n = 0;
-      const step = () => {
-        if (++n >= frames) this.el.banner.classList.remove('show');
-        else this._bRaf = requestAnimationFrame(step);
-      };
-      this._bRaf = requestAnimationFrame(step);
-    }
+    this._bannerPop(ms);
   }
 
   // Console hand-off: on the rival's turn the console visibly stands down and
