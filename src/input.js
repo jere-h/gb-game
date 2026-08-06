@@ -190,20 +190,19 @@ export class Input {
     // the window (touch events bubble) but only acted on when the gesture
     // started on the battlefield itself, so the HUD's own buttons keep every
     // touch that lands on them.
-    // A gesture only STARTS on the battlefield. The HUD's own controls keep
-    // every touch that lands on them, but the columns they live in are mostly
-    // pass-through glass (the rail is pointer-events:none so the wheel can
-    // reach the camera), so the element under a finger in the gaps BETWEEN two
-    // rail buttons is #hud — and a tap that hit nothing would otherwise steal
-    // the camera and pop a "reset view" chip at a player who pressed nothing.
-    // The rig already knows which columns those are; no class names needed.
-    const overHud = (x, y) => {
+    // ...and "on the battlefield" means the CLEAR glass. The console's columns
+    // are mostly pass-through (the view rail is pointer-events:none so the
+    // wheel can reach the camera), so a finger landing in the 4px gap BETWEEN
+    // two rail buttons hits #hud, counts as eligible, and steals the camera —
+    // popping a "reset view" chip at a player who pressed nothing. The rig
+    // already knows which columns those are; no class names needed here.
+    const overHud = (x) => {
       const ins = w.safeInsets ? w.safeInsets() : null;
       if (!ins) return false;
       const W = (canvas && canvas.clientWidth) || innerWidth || 1;
       return (ins.l > 0 && x < ins.l) || (ins.r > 0 && x > W - ins.r);
     };
-    const eligible = (t, p) => (p && p.length === 1 && overHud(p[0].x, p[0].y) ? false
+    const eligible = (t, p) => (p && p.length === 1 && overHud(p[0].x) ? false
       : t === canvas || t === document.body
       || (t && (t.id === 'app' || t.id === 'hud')));
     const pts = (e) => Array.from(e.touches).map((t) => ({ x: t.clientX, y: t.clientY }));

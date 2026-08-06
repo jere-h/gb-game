@@ -1639,7 +1639,7 @@ export class UI {
            are PERMANENT chrome in the console's own material: a caption, a
            trough that fills as the view widens, two steppers, SURVEY (frame
            both mobiles) and — the part that stops a player feeling trapped —
-           a gold RESET VIEW chip that lights the moment the camera stops being
+           a gold RESET chip that lights the moment the camera stops being
            automatic. Docked to the right rail, the same edge the aim column
            lives on, so "aim" and "look" are one thumb zone. */
         #hud .rightRail {
@@ -1699,10 +1699,10 @@ export class UI {
           box-shadow: inset 0 1px 0 rgba(255,255,255,0.28), 0 1px 0 rgba(0,0,0,0.6),
             0 0 12px rgba(255,215,94,0.45);
         }
-        /* SURVEY and RESET VIEW are peers, so they must LOOK like peers. SURVEY
+        /* SURVEY and RESET are peers, so they must LOOK like peers. SURVEY
            used to render as flat small-caps on the rail's own dark bottom — a
            caption in the same register as the VIEW label — while its twin wore
-           a gold plate. Both now carry the plate; RESET VIEW stays the louder
+           a gold plate. Both now carry the plate; RESET stays the louder
            of the two by being FILLED rather than by being the only one with
            any chrome at all. */
         #hud .cbtn.wide {
@@ -1744,9 +1744,13 @@ export class UI {
           box-shadow: inset 0 1px 0 rgba(255,255,255,0.65), 0 0 9px rgba(255,215,94,0.5);
           transition: height 0.18s ease-out;
         }
-        /* three hairlines, so 0.75 and 1.00 are not ten pixels of gold on gold */
+        /* Three graduation stubs on the left edge — a ruler, not three bars
+           across the whole face. Full-width rules were most of what made this
+           element read as a hamburger glyph, and they still have to be there:
+           without them 0.75 and 1.00 differ by ten pixels of gold on gold. */
         #hud .camTicks {
-          position: absolute; inset: 0; pointer-events: none;
+          position: absolute; top: 0; bottom: 0; left: 0; width: 36%;
+          pointer-events: none;
           background: linear-gradient(180deg,
             transparent 0 calc(25% - 1px), rgba(255,231,160,0.34) calc(25% - 1px) calc(25% + 1px),
             transparent calc(25% + 1px) calc(50% - 1px), rgba(255,231,160,0.34) calc(50% - 1px) calc(50% + 1px),
@@ -1758,9 +1762,8 @@ export class UI {
            everything above it is view the player asked for. Team blue, the
            colour the console already uses for "this is yours". */
         #hud .camAuto {
-          position: absolute; left: -2px; right: -2px; height: 2px; bottom: 20%;
-          background: #59c1ff; opacity: 0.9; pointer-events: none;
-          box-shadow: 0 0 5px rgba(89,193,255,0.85);
+          position: absolute; left: 0; right: 0; height: 2px; bottom: 20%;
+          background: #59c1ff; opacity: 0.78; pointer-events: none;
         }
         /* dead input at the limit: a 180ms nudge, so "nothing happened" is
            still an ANSWER rather than a frozen screen */
@@ -1780,7 +1783,7 @@ export class UI {
           font-size: 13px; font-weight: 800; letter-spacing: 0.06em;
           color: var(--gold); text-shadow: 0 2px 0 rgba(0,0,0,0.7), 0 0 8px rgba(0,0,0,0.5);
         }
-        /* RESET VIEW: reserved slot, so the buttons above it never move under
+        /* RESET: reserved slot, so the buttons above it never move under
            the thumb when manual control toggles. */
         #hud .cbtn.cReset {
           height: 26px; padding: 0 1px; line-height: 1.05; text-align: center;
@@ -1801,7 +1804,7 @@ export class UI {
                   0 0 13px rgba(255,215,94,0.85); }
         }
         /* The camera lesson NAMES this chip. A step that points at a rail and
-           says "hit RESET VIEW" while the slot is empty teaches a control that
+           says "hit RESET" while the slot is empty teaches a control that
            does not appear to exist, so the coach forces the reserved slot to
            show itself (greyed, because it is not armed yet) for that one step.
            The step also drives the lens live, which arms it for real. */
@@ -2037,6 +2040,12 @@ export class UI {
             0 0 0 9999px rgba(6,10,26,0.55);
         }
 
+        /* Touch floors that are not specific to phone landscape: a tablet in
+           landscape is over 500px tall, so it misses the block below, and a
+           36px "?" or a 28px NEXT is under the 44px minimum on any finger. */
+        #hud.touch .helpBtn { width: 44px; height: 44px; font-size: 22px; }
+        #hud.touch .cSkip, #hud.touch .cNext { height: 44px; padding: 0 16px; }
+
         /* --- compact rail + coach for small screens --- */
         @media (max-width: 980px) {
           #hud .coachCard { width: 320px; padding: 9px 12px 10px; }
@@ -2069,6 +2078,13 @@ export class UI {
           #hud .cbtn.wide::before { inset: -7px -7px; }   /* target 60x44 */
           #hud .cbtn.cReset { height: 30px; font-size: 11px; }
           #hud .camGauge { width: 46px; height: 24px; }
+          /* 24px of trough cannot carry quarter graduations — at 6px apart they
+             are noise. One half-way mark, plus the auto baseline. */
+          #hud .camTicks {
+            background: linear-gradient(180deg,
+              transparent 0 calc(50% - 1px), rgba(255,231,160,0.30) calc(50% - 1px) calc(50% + 1px),
+              transparent calc(50% + 1px));
+          }
           #hud .camVal { font-size: 11px; height: 12px; line-height: 12px; }
           /* display:block re-states what this layout's blanket miniLabel
              display:none takes away: the rail's caption is the only thing
@@ -2105,11 +2121,19 @@ export class UI {
              apart, with the irreversible one (SKIP) sitting where a thumb aims
              for the safe one. Both are now 40px, 20px apart, and SKIP loses
              its keycap: weight matches consequence. */
-          #hud .cFoot { margin-top: 8px; gap: 20px; }
-          #hud .cSkip, #hud .cNext { height: 40px; padding: 0 16px; font-size: 12px; }
-          #hud .cSkip {
+          /* Dots take their own row here. At 264px a progress rail plus two
+             40px buttons does not fit on one line, and the gate step's wider
+             bail-out label pushed the primary button straight through the
+             card's own border. The header's "4 / 7" carries the count anyway;
+             the dots are the shape of it. */
+          #hud .cFoot {
+            margin-top: 8px; gap: 20px; flex-wrap: wrap; justify-content: center;
+          }
+          #hud .cDots { flex: 1 0 100%; justify-content: center; margin-bottom: -6px; }
+          #hud .cSkip, #hud .cNext { height: 44px; padding: 0 16px; font-size: 12px; }
+          #hud.touch .cSkip {
             background: none; border: none; box-shadow: none;
-            color: rgba(255,231,160,0.75); padding: 0 10px;
+            color: rgba(255,231,160,0.75); padding: 0 12px;
           }
           #hud .cTapHint { margin-top: 6px; font-size: 11px; }
           #hud .helpCap {
@@ -2562,7 +2586,7 @@ export class UI {
   /* ================= camera / view controls ==========================
      ui.setZoom(level, manual) is the contract the camera rig calls every time
      the framing changes: level 0 = tightest, 1 = widest, manual = the player
-     has taken control (which is what raises RESET VIEW). */
+     has taken control (which is what raises the RESET chip). */
   // `flags` is optional and additive: the rig may report { atMax, atMin } when
   // the lens has saturated. When it does not, the HUD works it out itself from
   // the rig's zoom TARGET (see _camSat) — the level the rig reports is the
@@ -3393,7 +3417,11 @@ export class UI {
         // the least obvious control in the genre.
         this.el.cNext.classList.remove('hid');
         this.el.cNext.classList.add('secondary');
-        this.el.cNext.textContent = 'SKIP THIS STEP';
+        // Not "SKIP THIS STEP": the card already carries a SKIP, and two
+        // buttons a thumb-width apart both beginning "SKIP" is its own mis-tap.
+        // "MOVE ON" says the same thing and cannot be confused with the one
+        // that ends onboarding for good.
+        this.el.cNext.innerHTML = 'MOVE ON &#9656;';
       }, 6000);
     }
 

@@ -6,7 +6,7 @@
 // beyond the gameplay-object band (islands/mobiles live within ~±740) so
 // props are not sliced by the frame edge. Beyond the terrain canvas (±1200)
 // the backdrop keeps going — open sea (6000 wide) and six mountain bands
-// (3850+) — so frame-edge reach is cheap; see PAN_X / MANUAL_PAN_X.
+// (3850+) — so frame-edge reach is cheap; see MANUAL_ART_X / _panLimit.
 //
 // The rig also knows which screen edges the HUD permanently owns
 // (setSafeInsets, published by main.js) and composes against the CLEAR band
@@ -22,27 +22,29 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { WORLD_W, WORLD_H } from './terrain.js';
 import { clamp, lerp } from './util.js';
 
-// Two separate horizontal bounds, because they answer two different questions.
-//
-//   *_ART_X   how WIDE the lens may open (it sets the zoom ceiling).
-//   *_PAN_X   how far the frame EDGE may travel from world centre.
-//
-// They used to be one number, and that single number was the reason the phone
-// could not fix the reported complaint: at the widest legal lens halfW is
-// exactly ART_X, so the pan limit collapsed to zero and the frame was pinned
-// dead centre — with the rival parked under the aim pad and no control able to
-// slide it out. Pan reach is the cheap axis (past the terrain canvas there is
-// open sea, the 6000-wide sea sheet and the 3850+-wide mountain bands, i.e.
-// real art), so it is the one that gets the headroom.
-const ART_X = 1100;            // director's lens basis (unchanged)
-const PAN_X = 1330;            // director's frame-edge reach
-// The PLAYER's lens is allowed further than the director's: "as wide as it
-// goes" must always show strictly more world than the automatic establishing
-// shot, or the zoom control is dead on arrival at the one framing a new player
-// meets first. The reach is wider still so a manual frame can be slid out from
-// under the touch console at ANY lens, including the widest one.
+const ART_X = 1100;        // max |x| the view may reach at z=0
+// The PLAYER's lens is allowed a good deal further than the director's. The
+// terrain canvas ends at ±1200 and the backdrop keeps going well past it (a
+// 6000-wide sea sheet, six 3850+-wide mountain bands), so what a wider lens
+// buys is open water either side of the island cluster — the establishing
+// look, not a hole. It guarantees that "as wide as it goes" always shows
+// strictly more world than the automatic shot: otherwise the zoom control is
+// dead on arrival at the framing a new player meets first, which is exactly
+// the reported complaint. It also has to be wide enough that both mobiles fit
+// in the band the HUD leaves CLEAR, which on a landscape phone is only ~65% of
+// the screen (see _marginLR).
 const MANUAL_ART_X = 1310;
-const MANUAL_PAN_X = 1500;
+// Extra frame-EDGE reach, on top of the lens bound above, granted purely so a
+// frame can slide out from under the console.
+//
+// This is the geometric reason nothing could fix the reported complaint before:
+// the lens bound and the pan bound were the same number, so at the widest legal
+// lens halfW equalled ART_X exactly, the pan limit collapsed to zero, and the
+// frame was pinned dead centre with the rival parked under the aim pad. Four
+// taps of "−" moved it 12px; SURVEY moved it 5. The grant is exactly the width
+// of the recentring the insets ask for (never more), so a screen with no
+// console furniture — every desktop — keeps the framing it always had.
+const PAN_INSET_MAX = 0.22;   // ...capped at this fraction of the art bound
 // Headroom the director leaves above itself, as a fraction of the player's
 // widest lens. An automatic wide frame is never allowed to sit ON the player's
 // ceiling: the zoom rail must always have somewhere to travel. Never applied
@@ -126,6 +128,11 @@ const SURVEY_MARGIN = 0.10;
 // button the onboarding names as the way to see your target zoomed IN by 11%
 // from a cold load. A survey has to be visibly a step back or it is a lie.
 const SURVEY_WIDEN = 1.22;
+// Ceiling for that floor, as a level across the player's own zoom range: a
+// survey that always landed on the end stop would make SURVEY and "as wide as
+// it goes" the same control, and would leave the zoom-out button dead the
+// moment onboarding told the player to press SURVEY.
+const SURVEY_HEADROOM = 0.92;
 // Below this much change in lens level, a survey press would not be visible.
 // It then does nothing at all rather than latching manual mode and popping the
 // "reset view" chip at a player who pressed a button and saw no change.
@@ -496,10 +503,6 @@ export class World {
     return zoom < AIM_ZOOM ? zoom : 0;
   }
 
-  // Clamp a {x, y, zoom} view so the frustum at z=0 stays inside the art.
-  // `manual` = the player is driving: they get the slightly wider reach the
-  // director does not use, so "widest" is always wider than any frame the game
-  // composes for them.
   // Widest lens this viewport may legally reach. `manual` = the player is
   // driving; they get the wider basis (see MANUAL_ART_X). The vertical term
   // matters once a player can dolly out on demand, because a frame taller than
@@ -514,16 +517,28 @@ export class World {
     );
   }
 
+  // How far the frame CENTRE may travel: the art bound, less the half-frame,
+  // plus exactly the recentring the HUD insets ask for (see PAN_INSET_MAX).
+  // Without that last term the widest frames are pinned dead centre and no
+  // camera control on earth can move a mobile out from under the console.
+  _panLimit(halfW, manual = false) {
+    const artX = manual ? MANUAL_ART_X : ART_X;
+    const f = this._insetFrac();
+    const extra = Math.min(Math.abs(f.r - f.l) * halfW, artX * PAN_INSET_MAX);
+    return Math.max(0, artX + extra - halfW);
+  }
+
+  // Clamp a {x, y, zoom} view so the frustum at z=0 stays inside the art.
+  // `manual` = the player is driving: they get the wider lens and the wider
+  // reach the director does not use, so "widest" is always wider than any frame
+  // the game composes for them.
   _clampView(v, manual = false) {
     const tanH = Math.tan((this.camera.fov * Math.PI) / 360);
     const aspect = this.camera.aspect || 16 / 9;
     v.zoom = clamp(v.zoom, MIN_ZOOM, this._zoomCap(manual));
     const halfH = tanH * v.zoom;
     const halfW = halfH * aspect;
-    // Pan reach, NOT the lens basis: the frame edge is allowed further out than
-    // the widest lens, which is what leaves a wide frame room to slide out from
-    // under the HUD instead of being pinned dead centre.
-    const xLim = Math.max(0, (manual ? MANUAL_PAN_X : PAN_X) - halfW);
+    const xLim = this._panLimit(halfW, manual);
     v.x = clamp(v.x, -xLim, xLim);
     const yMin = VIEW_BOTTOM + halfH;
     const yMax = VIEW_TOP - halfH;
@@ -694,9 +709,12 @@ export class World {
     // is told so it can say "that is as far as it goes" instead of leaving a
     // fully lit button that does nothing. (zoomByLevel guards the wheel and the
     // keys; this guards the rail's own stepper, which sets an absolute level.)
-    if (manual && this._deadPress(req - this.zoomLevelTarget())) {
-      this._limitHit(req >= this.zoomLevelTarget() ? 1 : -1);
-      return this.zoomLevelTarget();
+    const cur = this.zoomLevelTarget();
+    const pinned = (req >= 0.999 && cur >= 0.999) || (req <= 0.001 && cur <= 0.001);
+    if (manual && (pinned || this._deadPress(req - cur))) {
+      this._limitHit(req >= cur ? 1 : -1);
+      this._forceReport();
+      return cur;
     }
     if (manual) this._takeOver();
     this._dropSurvey();
@@ -880,11 +898,19 @@ export class World {
     const r = this.zoomRange();
     // Floored against the AUTOMATIC lens, not just against the cast. On every
     // viewport tested the establishing shot already holds both mobiles, so a
-    // survey that only "fits the cast" fits it tighter than the frame it
-    // replaced — pressing it zoomed IN. A survey is a step back, always.
-    // Padded by the HUD insets through _marginLR, so "frames both tanks" means
-    // frames them where they can be seen.
-    const floor = clamp((this._auto.zoom || this.target.zoom) * SURVEY_WIDEN, r.lo, r.hi);
+    // survey that only "fits the cast" fits it TIGHTER than the frame it
+    // replaced: from a cold load, pressing the button onboarding names as the
+    // way to see your target zoomed IN by 11%. A survey is a step back, always.
+    // (The fit itself is padded by the HUD insets through _marginLR, so "frames
+    // both tanks" means frames them where they can actually be seen.)
+    //
+    // The floor stops short of the end stop, so SURVEY and "as wide as it goes"
+    // stay two different answers and the zoom rail still has travel left the
+    // moment onboarding has sent the player to press SURVEY.
+    const room = r.lo + SURVEY_HEADROOM * (r.hi - r.lo);
+    const floor = clamp(
+      Math.min((this._auto.zoom || this.target.zoom) * SURVEY_WIDEN, room), r.lo, r.hi,
+    );
     // survey is the PLAYER's frame; it may spend the whole lens.
     const ok = this._frameWide(t, brief, SURVEY_MARGIN, r.hi, floor);
     this._band = band;
