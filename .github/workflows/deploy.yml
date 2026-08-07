@@ -25,6 +25,12 @@ jobs:
       - uses: actions/configure-pages@v5
         with:
           enablement: true
+      # Pages serves everything with max-age=600 and no way to set headers, so
+      # cache-busting is baked into the artifact: every asset URL gets the
+      # commit SHA, making a new deploy a set of URLs no browser has cached.
+      # Runs on the checkout, so the repo source stays clean.
+      - name: Stamp build for cache-busting
+        run: node scripts/stamp-build.mjs --version "${{ github.sha }}"
       - uses: actions/upload-pages-artifact@v3
         with:
           path: .

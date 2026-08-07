@@ -3,6 +3,44 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
+<script>
+// ALWAYS RUN THE NEWEST BUILD.
+//
+// GitHub Pages serves every file with `Cache-Control: max-age=600` and offers
+// no way to set headers, so freshness is enforced from the client side:
+//
+//  1. scripts/stamp-build.mjs appends ?v=<version> to every asset URL at deploy
+//     time, so a new build is a set of URLs no browser has ever cached. That
+//     covers the whole module graph, not just the entry point.
+//  2. index.html ITSELF can still be served stale (up to Pages' 10 minutes, and
+//     Safari is happy to hold it longer). The check below catches exactly that:
+//     the running document knows the version it was built with, so it asks the
+//     server what is actually deployed and reloads once if they disagree.
+//
+// The meta tags above are belt-and-braces — browsers largely ignore http-equiv
+// cache directives, which is why the real work happens here.
+(function () {
+  var RUNNING = '__BUILD_VERSION__';
+  // Unstamped local dev: no version.json, nothing to compare, do nothing.
+  if (RUNNING === '__BUILD' + '_VERSION__') return;
+  try {
+    fetch('./version.json?t=' + Date.now(), { cache: 'no-store' })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) {
+        if (!j || !j.version || j.version === RUNNING) return;
+        // Reload at most once per deployed version, so a misconfigured server
+        // can never put the page in a refresh loop.
+        var key = 'tb.freshened.' + j.version;
+        try { if (sessionStorage.getItem(key)) return; sessionStorage.setItem(key, '1'); } catch (e) {}
+        location.reload();
+      })
+      .catch(function () {});
+  } catch (e) {}
+})();
+</script>
 <title>ThunderBound — Artillery Duel</title>
 <style>
   /* Chunky rounded display font for the HUD (local asset, no external hosts). */
