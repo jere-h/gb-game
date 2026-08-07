@@ -149,6 +149,29 @@ export class Input {
       return false;
     };
 
+    // iOS SAFARI PAGE ZOOM. Safari has ignored `user-scalable=no` and
+    // `maximum-scale` since iOS 10, so the viewport meta tag does NOT stop a
+    // pinch from zooming the document — and this game teaches pinch as its
+    // camera-zoom gesture, so a player following the tutorial zoomed Safari
+    // instead. Once the page is scaled the fixed-position HUD anchors to the
+    // (now larger) layout viewport while the canvas covers only the visual one:
+    // giant controls, and a black band down the edge with buttons stranded off
+    // the render. These non-standard `gesture*` events are the only hook that
+    // suppresses it; touch-action and the meta tag are both insufficient.
+    for (const type of ['gesturestart', 'gesturechange', 'gestureend']) {
+      document.addEventListener(type, (e) => e.preventDefault(), { passive: false });
+    }
+    // Safari also double-tap-zooms. The camera claims double-tap for "give me
+    // the camera back", so the browser's interpretation has to be suppressed
+    // before it competes. touch-action:manipulation covers most of it; this
+    // catches the case where the two taps land on the canvas itself.
+    let lastTapAt = 0;
+    canvas.addEventListener('touchend', (e) => {
+      const now = e.timeStamp || Date.now();
+      if (now - lastTapAt < DOUBLE_TAP_MS && e.cancelable) e.preventDefault();
+      lastTapAt = now;
+    }, { passive: false });
+
     // Wheel: the obvious desktop gesture. Scroll down/away = pull back.
     window.addEventListener('wheel', (e) => {
       let d = e.deltaY;

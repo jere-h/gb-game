@@ -212,10 +212,34 @@ export class World {
 
     this.resize();
     window.addEventListener('resize', () => this.resize());
+    // iOS Safari: the VISUAL viewport is what the player can actually see, and
+    // it diverges from innerWidth/innerHeight whenever the toolbar overlays the
+    // page or the page gets pinch-zoomed (Safari ignores user-scalable=no, so
+    // that can happen despite the meta tag). Sizing to the layout viewport in
+    // that state leaves the canvas smaller than the screen — a black band down
+    // one edge with HUD controls stranded outside the render.
+    if (window.visualViewport) {
+      const onVV = () => this.resize();
+      visualViewport.addEventListener('resize', onVV);
+      visualViewport.addEventListener('scroll', onVV);
+    }
+  }
+
+  // Size of the area the player can actually see, in CSS px. Falls back to the
+  // layout viewport where visualViewport is unavailable.
+  viewportSize() {
+    const vv = window.visualViewport;
+    if (vv && vv.width > 0 && vv.height > 0) {
+      // vv.width/height are already divided by vv.scale, so a pinch-zoomed page
+      // reports the smaller visible rect — which is exactly what we must fill.
+      return { w: Math.round(vv.width), h: Math.round(vv.height), scale: vv.scale || 1 };
+    }
+    return { w: innerWidth, h: innerHeight, scale: 1 };
   }
 
   resize() {
-    const w = innerWidth, h = innerHeight;
+    const { w, h } = this.viewportSize();
+    if (!w || !h) return;
     this._vw = w;
     this._vh = h;
     this.renderer.setSize(w, h);
